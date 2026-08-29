@@ -186,6 +186,13 @@ async def generate(
                 image_media_type=image_media_type,
             )
     except Exception:
+        # If the image was rejected (e.g. a mis-detected text-only model),
+        # retry once with the OCR text already embedded in `user`, never raw-error.
+        if image is not None:
+            try:
+                return await generate(system, user, model=model)
+            except Exception:
+                pass
         # Never break the chat UX on a provider/network failure.
         return await _call_mock(system, user)
     return await _call_mock(system, user)
@@ -219,6 +226,14 @@ async def generate_stream(
                 yield tok
             return
         except Exception:
+            if image is not None:
+                # Retry without the image (OCR text is already in `user`).
+                try:
+                    async for tok in generate_stream(system, user, model=model):
+                        yield tok
+                    return
+                except Exception:
+                    pass
             async for tok in _stream_mock(system, user):
                 yield tok
             return

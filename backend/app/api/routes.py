@@ -426,15 +426,15 @@ async def chat_stream(
     final_message = message or ""
     send_image = False
     if image_bytes is not None:
+        if ocr_text.strip():
+            final_message = (
+                f"{final_message}\n\n"
+                f"[Text extracted from the attached image via OCR:]\n{ocr_text.strip()}"
+            ).strip()
         if model_supports_vision(settings.llm_provider, model or settings.llm_model):
-            send_image = True  # true multimodal call below
+            send_image = True  # true multimodal call; OCR text above is the fallback
         else:
-            if ocr_text.strip():
-                final_message = (
-                    f"{final_message}\n\n"
-                    f"[Text extracted from the attached image via OCR:]\n{ocr_text.strip()}"
-                ).strip()
-            else:
+            if not ocr_text.strip():
                 raise HTTPException(
                     400,
                     "The current model is text-only and the attached image has no "
