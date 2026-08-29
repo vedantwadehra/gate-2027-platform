@@ -30,7 +30,7 @@ def _run_migrations() -> None:
             "tags": "TEXT",
         },
         "users": {
-            "is_admin": "BOOLEAN NOT NULL DEFAULT 0",
+            "is_admin": "BOOLEAN NOT NULL DEFAULT FALSE",
         },
         "questions": {
             "updated_at": "TIMESTAMP",
@@ -50,7 +50,7 @@ def _run_migrations() -> None:
         # Grant the demo account admin so the admin UI is usable out of the box.
         if "users" in present:
             conn.execute(
-                text("UPDATE users SET is_admin = 1 WHERE email = 'demo@gatetest.com'")
+                text("UPDATE users SET is_admin = TRUE WHERE email = 'demo@gatetest.com'")
             )
         conn.commit()
 
