@@ -1,5 +1,10 @@
 FROM node:20-alpine AS builder
 WORKDIR /app
+# Allow overriding the backend URL at build time (render.yaml passes it as a
+# runtime env; this ARG lets local/CI builds set it too). The production
+# default lives in next.config.mjs.
+ARG BACKEND_URL
+ENV BACKEND_URL=$BACKEND_URL
 COPY frontend/package*.json ./
 RUN npm ci
 COPY frontend/ ./
