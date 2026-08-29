@@ -26,6 +26,7 @@ export default function ChatPage() {
   ]);
   const [input, setInput] = useState("");
   const [busy, setBusy] = useState(false);
+  const [imgFile, setImgFile] = useState<File | null>(null);
 
   const [topic, setTopic] = useState("");
   const [genQ, setGenQ] = useState<GenQ | null>(null);
@@ -77,22 +78,35 @@ export default function ChatPage() {
 
   async function send() {
     const text = input.trim();
-    if (!text || busy) return;
+    if ((!text && !imgFile) || busy) return;
     const userId = msgId++;
     const botId = msgId++;
     setMessages((m) => [
       ...m,
-      { id: userId, role: "user", text },
+      { id: userId, role: "user", text: text || "(image attached)" },
       { id: botId, role: "bot", text: "" },
     ]);
     setInput("");
     setBusy(true);
+    const fd = new FormData();
+    fd.append("paper", paper);
+    fd.append("message", text);
+    if (sessionRef.current) fd.append("session_id", sessionRef.current);
+    if (model) fd.append("model", model);
+    if (imgFile) fd.append("image", imgFile);
     try {
-      const res = await fetch("/api/chat/stream", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ paper, message: text, session_id: sessionRef.current, model }),
-      });
+      const res = await fetch("/api/chat/stream", { method: "POST", body: fd });
+      if (!res.ok) {
+        let errMsg = "Sorry, the tutor could not process that.";
+        try {
+          const j = await res.json();
+          if (j.detail) errMsg = j.detail;
+        } catch {
+          /* keep default */
+        }
+        appendTo(botId, `\n[${errMsg}]`);
+        return;
+      }
       const reader = res.body!.getReader();
       const decoder = new TextDecoder();
       let buf = "";
@@ -120,6 +134,7 @@ export default function ChatPage() {
       appendTo(botId, "\n[Sorry, the tutor service was unreachable.]");
     } finally {
       setBusy(false);
+      setImgFile(null);
     }
   }
 
@@ -292,21 +307,58 @@ export default function ChatPage() {
           ))}
         </div>
         <div className="chat-input">
-          <textarea
-            rows={2}
-            placeholder="Ask a doubt or request a practice question…"
-            value={input}
-            onChange={(e) => setInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                send();
-              }
-            }}
-          />
-          <button className="btn" onClick={send} disabled={busy}>
-            Send
-          </button>
+          {imgFile && (
+            <div style={{ display: "flex", gap: 8, alignItems: "center", marginBottom: 8 }}>
+              <span className="chip">
+                {imgFile.name}
+                <button
+                  onClick={() => setImgFile(null)}
+                  style={{
+                    marginLeft: 6,
+                    background: "transparent",
+                    border: "none",
+                    color: "inherit",
+                    cursor: "pointer",
+                  }}
+                >
+                  ×
+                </button>
+              </span>
+              <span className="muted" style={{ fontSize: 12 }}>
+                Attached — tutor will read it (OCR or vision).
+              </span>
+            </div>
+          )}
+          <div style={{ display: "flex", gap: 10, alignItems: "flex-end" }}>
+            <label
+              className="btn secondary"
+              style={{ flex: "none", cursor: "pointer" }}
+              title="Attach an image (diagram, notes, question)"
+            >
+              Attach image
+              <input
+                type="file"
+                accept="image/*"
+                style={{ display: "none" }}
+                onChange={(e) => setImgFile(e.target.files?.[0] || null)}
+              />
+            </label>
+            <textarea
+              rows={2}
+              placeholder="Ask a doubt or request a practice question…"
+              value={input}
+              onChange={(e) => setInput(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" && !e.shiftKey) {
+                  e.preventDefault();
+                  send();
+                }
+              }}
+            />
+            <button className="btn" onClick={send} disabled={busy}>
+              Send
+            </button>
+          </div>
         </div>
       </div>
     </div>

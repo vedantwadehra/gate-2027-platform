@@ -38,22 +38,41 @@ def build_gen_system(paper: str, context_chunks: list[str]) -> str:
     return f"{GEN_TEMPLATE}\n\nPaper: {paper}\n\nRetrieved context:\n{context}"
 
 
-async def answer_question(paper: str, message: str, model: str | None = None) -> str:
+async def answer_question(
+    paper: str,
+    message: str,
+    model: str | None = None,
+    image: bytes | None = None,
+    image_media_type: str | None = None,
+) -> str:
     chunks = retrieval.retrieve(paper, message, k=4)
     system = build_system(paper, chunks)
     from app.core.llm import generate
 
-    return await generate(system, message, model=model)
+    return await generate(
+        system, message, model=model, image=image, image_media_type=image_media_type
+    )
 
 
 async def answer_question_stream(
-    paper: str, message: str, history: list[dict] | None = None, model: str | None = None
+    paper: str,
+    message: str,
+    history: list[dict] | None = None,
+    model: str | None = None,
+    image: bytes | None = None,
+    image_media_type: str | None = None,
 ):
     chunks = retrieval.retrieve(paper, message, k=4)
     system = build_system(paper, chunks, history)
     from app.core.llm import generate_stream
 
-    async for token in generate_stream(system, message, model=model):
+    async for token in generate_stream(
+        system,
+        message,
+        model=model,
+        image=image,
+        image_media_type=image_media_type,
+    ):
         yield token
 
 

@@ -3,11 +3,13 @@ from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
 import json
 import io
+import hashlib
 from sqlalchemy.orm import Session
 
 from app.db.session import get_db, SessionLocal
 from app.db import models
 from app.db.models import _now
+from app.core.llm import model_supports_vision
 from app.data import syllabus
 from app.data import questions as qb
 from app.services import tests as test_service
@@ -396,20 +398,57 @@ async def chat(req: ChatRequest, db: Session = Depends(get_db)):
 
 @api.post("/chat/stream")
 async def chat_stream(
-    req: ChatRequest,
+    paper: str = Form(...),
+    message: str = Form(""),
+    session_id: str | None = Form(None),
+    model: str | None = Form(None),
+    image: UploadFile | None = File(None),
     user: dict | None = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if req.paper not in ("DA", "CS"):
+    if paper not in ("DA", "CS"):
         raise HTTPException(400, "Unknown paper")
 
+    # --- Image handling: OCR for text-only models, multimodal for vision models ---
+    image_bytes: bytes | None = None
+    image_media: str | None = None
+    ocr_text = ""
+    if image is not None and image.filename:
+        raw = await image.read()
+        if raw:
+            image_bytes = raw
+            image_media = image.content_type or "image/png"
+            try:
+                ocr_text = _ocr_image(raw)
+            except Exception:
+                ocr_text = ""
+
+    final_message = message or ""
+    send_image = False
+    if image_bytes is not None:
+        if model_supports_vision(settings.llm_provider, model or settings.llm_model):
+            send_image = True  # true multimodal call below
+        else:
+            if ocr_text.strip():
+                final_message = (
+                    f"{final_message}\n\n"
+                    f"[Text extracted from the attached image via OCR:]\n{ocr_text.strip()}"
+                ).strip()
+            else:
+                raise HTTPException(
+                    400,
+                    "The current model is text-only and the attached image has no "
+                    "extractable text. Switch to a vision-capable model (e.g., OpenAI "
+                    "gpt-4o) to discuss images/diagrams.",
+                )
+
     history = []
-    if req.session_id:
+    if session_id:
         msgs = (
             db.query(models.ChatMessage)
             .filter(
-                models.ChatMessage.session_id == req.session_id,
-                models.ChatMessage.paper == req.paper,
+                models.ChatMessage.session_id == session_id,
+                models.ChatMessage.paper == paper,
             )
             .order_by(models.ChatMessage.created_at.asc())
             .limit(12)
@@ -418,20 +457,22 @@ async def chat_stream(
         history = [{"role": m.role, "content": m.content} for m in msgs]
 
     # Persist the user's message.
-    if req.session_id:
+    if session_id:
         db.add(
             models.ChatMessage(
                 user_id=int(user["sub"]) if user else None,
-                session_id=req.session_id,
-                paper=req.paper,
+                session_id=session_id,
+                paper=paper,
                 role="user",
-                content=req.message,
+                content=final_message,
             )
         )
         db.commit()
 
     full_reply = ""
-    cache_key = _cache_key("chat", req.paper, req.message, req.model or "")
+    cache_key = _cache_key("chat", paper, final_message, model or "")
+    if image_bytes is not None:
+        cache_key += ":" + hashlib.sha256(image_bytes).hexdigest()[:16]
 
     async def event_gen():
         nonlocal full_reply
@@ -446,19 +487,24 @@ async def chat_stream(
             return
 
         async for token in chat_service.answer_question_stream(
-            req.paper, req.message, history, req.model
+            paper,
+            final_message,
+            history,
+            model,
+            image=image_bytes if send_image else None,
+            image_media_type=image_media,
         ):
             full_reply += token
             yield f"data: {json.dumps({'token': token})}\n\n"
         # Persist the assistant reply now that streaming is complete.
-        if req.session_id:
+        if session_id:
             sdb = SessionLocal()
             try:
                 sdb.add(
                     models.ChatMessage(
                         user_id=int(user["sub"]) if user else None,
-                        session_id=req.session_id,
-                        paper=req.paper,
+                        session_id=session_id,
+                        paper=paper,
                         role="assistant",
                         content=full_reply,
                     )

@@ -106,15 +106,18 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request, call_next):
         path = request.url.path
         if path.startswith("/api/chat") or path.startswith("/api/generate"):
+            import time
+
             ip = request.client.host if request.client else "anon"
-            now = __import__("time").time()
+            now = time.time()
             key = (ip, path)
-            self.hits[key] = [t for t in self.hits[key] if now - t < self.window]
-            if len(self.hits[key]) >= self.limit:
+            buf = [t for t in self.hits.get(key, []) if now - t < self.window]
+            if len(buf) >= self.limit:
                 return JSONResponse(
                     status_code=429, content={"detail": "Rate limit exceeded. Try again shortly."}
                 )
-            self.hits[key].append(now)
+            buf.append(now)
+            self.hits[key] = buf
         return await call_next(request)
 
 
