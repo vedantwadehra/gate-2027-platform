@@ -486,16 +486,25 @@ async def chat_stream(
             yield "data: [DONE]\n\n"
             return
 
-        async for token in chat_service.answer_question_stream(
-            paper,
-            final_message,
-            history,
-            model,
-            image=image_bytes if send_image else None,
-            image_media_type=image_media,
-        ):
-            full_reply += token
-            yield f"data: {json.dumps({'token': token})}\n\n"
+        try:
+            async for token in chat_service.answer_question_stream(
+                paper,
+                final_message,
+                history,
+                model,
+                image=image_bytes if send_image else None,
+                image_media_type=image_media,
+            ):
+                full_reply += token
+                yield f"data: {json.dumps({'token': token})}\n\n"
+        except Exception:
+            # Never surface a raw provider error to the chat UI.
+            full_reply = (
+                "Sorry, the tutor couldn't process that right now. "
+                "If you attached an image, try a vision-capable model or rephrase "
+                "your question as text."
+            )
+            yield f"data: {json.dumps({'token': full_reply})}\n\n"
         # Persist the assistant reply now that streaming is complete.
         if session_id:
             sdb = SessionLocal()
