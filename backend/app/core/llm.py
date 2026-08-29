@@ -27,8 +27,29 @@ def model_supports_vision(provider: str, model: str | None) -> bool:
     """Best-effort check of whether the configured model can ingest images."""
     if (provider or "").lower() == "google":
         return True
+    if (provider or "").lower() == "groq":
+        # Groq only serves image input on models whose id contains "vision".
+        return "vision" in (model or "").lower()
     name = (model or "").lower()
     return any(hint in name for hint in VISION_HINTS)
+
+
+# Some providers (e.g. Groq) return a rejection as a *normal* 200 completion
+# whose content is the error message, rather than as an HTTP error. Detect it.
+_ERROR_SIGNS = (
+    "does not support image input",
+    "invalid_request_error",
+    "this model does not support",
+    "model does not support",
+    "is not a supported model",
+    '"error"',
+    "cannot read",
+)
+
+
+def _looks_like_provider_error(text: str) -> bool:
+    t = (text or "").lower()
+    return any(sign in t for sign in _ERROR_SIGNS)
 
 
 def _openai_user_content(user: str, image: bytes | None, image_media_type: str | None):
@@ -168,16 +189,17 @@ async def generate(
     """Generate a reply, falling back to the mock tutor on any provider error."""
     provider = settings.llm_provider.lower()
     try:
+        reply = None
         if provider == "openai" and settings.llm_api_key:
-            return await _call_openai(
+            reply = await _call_openai(
                 system, user, model=model, image=image, image_media_type=image_media_type
             )
-        if provider == "google" and settings.llm_api_key:
-            return await _call_google(
+        elif provider == "google" and settings.llm_api_key:
+            reply = await _call_google(
                 system, user, image=image, image_media_type=image_media_type
             )
-        if provider == "groq" and settings.llm_api_key:
-            return await _call_openai(
+        elif provider == "groq" and settings.llm_api_key:
+            reply = await _call_openai(
                 system,
                 user,
                 base_url="https://api.groq.com/openai/v1",
@@ -185,6 +207,12 @@ async def generate(
                 image=image,
                 image_media_type=image_media_type,
             )
+        if reply is None:
+            return await _call_mock(system, user)
+        # A provider may return the rejection as ordinary content (HTTP 200).
+        if _looks_like_provider_error(reply):
+            raise RuntimeError("provider returned an error response")
+        return reply
     except Exception:
         # If the image was rejected (e.g. a mis-detected text-only model),
         # retry once with the OCR text already embedded in `user`, never raw-error.
@@ -195,7 +223,6 @@ async def generate(
                 pass
         # Never break the chat UX on a provider/network failure.
         return await _call_mock(system, user)
-    return await _call_mock(system, user)
 
 
 async def generate_stream(
@@ -214,6 +241,7 @@ async def generate_stream(
     if provider in ("openai", "groq") and settings.llm_api_key:
         base = "https://api.groq.com/openai/v1" if provider == "groq" else None
         mdl = model or (settings.groq_model if provider == "groq" else None)
+        buf: list[str] = []
         try:
             async for tok in _stream_openai(
                 system,
@@ -223,6 +251,11 @@ async def generate_stream(
                 image=image,
                 image_media_type=image_media_type,
             ):
+                buf.append(tok)
+            # A provider may embed the rejection in ordinary streamed content.
+            if _looks_like_provider_error("".join(buf)):
+                raise RuntimeError("provider returned an error response")
+            for tok in buf:
                 yield tok
             return
         except Exception:
