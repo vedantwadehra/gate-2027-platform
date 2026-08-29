@@ -1,7 +1,9 @@
 # Render Blueprint — one-click deploy from this repo.
 # Render reads DATABASE_URL from the Postgres add-on, auto-generates
 # JWT_SECRET/ADMIN_KEY (persisted), and prompts once for LLM_API_KEY.
-# Public URLs are deterministic: https://<service-name>.onrender.com
+# Service names are kept unique so URLs are deterministic:
+#   https://gate2027-backend.onrender.com
+#   https://gate2027-frontend.onrender.com
 
 databases:
   - name: gate-postgres
@@ -12,7 +14,7 @@ databases:
 
 services:
   - type: web
-    name: gate-backend
+    name: gate2027-backend
     runtime: docker
     dockerfilePath: ./backend/Dockerfile
     plan: free
@@ -35,10 +37,10 @@ services:
       - key: ADMIN_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        value: https://gate-frontend.onrender.com
+        value: https://gate2027-frontend.onrender.com
 
   - type: web
-    name: gate-frontend
+    name: gate2027-frontend
     runtime: docker
     dockerfilePath: ./frontend/Dockerfile
     plan: free
@@ -47,4 +49,4 @@ services:
       - key: NODE_ENV
         value: production
       - key: BACKEND_URL
-        value: https://gate-backend.onrender.com
+        value: https://gate2027-backend.onrender.com
