@@ -1,0 +1,50 @@
+# Render Blueprint — one-click deploy from this repo.
+# Render reads DATABASE_URL from the Postgres add-on, auto-generates
+# JWT_SECRET/ADMIN_KEY (persisted), and prompts once for LLM_API_KEY.
+# Public URLs are deterministic: https://<service-name>.onrender.com
+
+databases:
+  - name: gate-postgres
+    databaseName: gatedb
+    user: gateuser
+    plan: free
+    postgresMajorVersion: 16
+
+services:
+  - type: web
+    name: gate-backend
+    runtime: docker
+    dockerfilePath: ./backend/Dockerfile
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: DATABASE_URL
+        fromDatabase:
+          name: gate-postgres
+          property: connectionString
+      - key: LLM_PROVIDER
+        value: groq
+      - key: LLM_API_KEY
+        sync: false
+      - key: LLM_MODEL
+        value: openai/gpt-oss-120b
+      - key: GROQ_MODEL
+        value: openai/gpt-oss-120b
+      - key: JWT_SECRET
+        generateValue: true
+      - key: ADMIN_KEY
+        generateValue: true
+      - key: CORS_ORIGINS
+        value: https://gate-frontend.onrender.com
+
+  - type: web
+    name: gate-frontend
+    runtime: docker
+    dockerfilePath: ./frontend/Dockerfile
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: BACKEND_URL
+        value: https://gate-backend.onrender.com

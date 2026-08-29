@@ -1,0 +1,32 @@
+# Dependencies
+node_modules/
+.pnp
+.pnp.js
+
+# Build output
+.next/
+out/
+build/
+dist/
+
+# Env & secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+*.key
+
+# Local databases
+*.db
+gate.db
+test_gate.db
+data/
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+
+# Editor / OS
+.DS_Store
+*.log
