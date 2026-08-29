@@ -1,0 +1,14 @@
+name: Keep backend awake
+
+on:
+  schedule:
+    - cron: "*/10 * * * *"
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Ping backend
+        run: curl -sS -o /dev/null -w "backend: HTTP %{http_code}\n" https://gate2027-backend.onrender.com/
