@@ -15,11 +15,11 @@ dist/
 .env.*.local
 *.key
 
-# Local databases
+# Local databases (runtime data dir for this app: sqlite db + uploads)
 *.db
 gate.db
 test_gate.db
-data/
+backend/data/
 
 # Python
 __pycache__/
