@@ -5375,6 +5375,16 @@ def get_question(paper: str, qid: str, db) -> dict | None:
     return row.to_dict() if row else None
 
 
+def _strip_nul(value):
+    """Postgres/psycopg2 reject NUL (0x00) bytes in string literals; SQLite is
+    lenient. Scraped PDF text can contain them, so strip before persisting."""
+    if isinstance(value, str):
+        return value.replace("\x00", "")
+    if isinstance(value, list):
+        return [_strip_nul(v) for v in value]
+    return value
+
+
 def seed_questions(db) -> int:
     """Populate the questions table from this seed file (no-op if non-empty)."""
     from app.db import models
@@ -5387,14 +5397,14 @@ def seed_questions(db) -> int:
             db.add(
                 models.Question(
                     paper=paper,
-                    qid=q.get("id") or q.get("qid"),
-                    section=q.get("section", ""),
-                    text=q.get("text", ""),
-                    options=q.get("options", []),
+                    qid=_strip_nul(q.get("id") or q.get("qid")),
+                    section=_strip_nul(q.get("section", "")),
+                    text=_strip_nul(q.get("text", "")),
+                    options=_strip_nul(q.get("options", [])),
                     answer=q.get("answer", 0),
-                    explanation=q.get("explanation", ""),
+                    explanation=_strip_nul(q.get("explanation", "")),
                     year=q.get("year"),
-                    source=q.get("source"),
+                    source=_strip_nul(q.get("source")),
                     verified=bool(q.get("verified", False)),
                 )
             )
