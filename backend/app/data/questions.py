@@ -29369,42 +29369,72 @@ def _strip_nul(value):
 def seed_questions(db) -> int:
     """Insert seed-file questions missing from the table (idempotent top-up).
 
-    Previously a no-op whenever the table was non-empty, which stranded all
-    later bank expansions on deployed DBs. Now inserts only (paper, qid)
-    pairs not already present; never deletes or modifies existing rows.
+    Also backfills the seed-owned grading fields (marks, qtype, answer_list,
+    answer_num, answer_tol) on existing rows: rows seeded before those fields
+    existed carry stale defaults (e.g. marks=1), which would otherwise corrupt
+    GATE-pattern set building forever. Never touches content fields and never
+    deletes rows. (The admin API cannot edit grading fields, so seed-wins is
+    safe here.)
     """
     from app.db import models
 
-    existing = {
-        (r.paper, r.qid)
-        for r in db.query(models.Question.paper, models.Question.qid).all()
+    have = {
+        (r.paper, r.qid): r
+        for r in db.query(
+            models.Question.id,
+            models.Question.paper,
+            models.Question.qid,
+            models.Question.marks,
+            models.Question.qtype,
+            models.Question.answer_list,
+            models.Question.answer_num,
+            models.Question.answer_tol,
+        ).all()
     }
     created = 0
     for paper, qs in QUESTIONS.items():
         for q in qs:
             qid = _strip_nul(q.get("id") or q.get("qid"))
-            if (paper, qid) in existing:
-                continue
-            db.add(
-                models.Question(
-                    paper=paper,
-                    qid=qid,
-                    section=_strip_nul(q.get("section", "")),
-                    text=_strip_nul(q.get("text", "")),
-                    options=_strip_nul(q.get("options", [])),
-                    answer=q.get("answer", 0),
-                    marks=int(q.get("marks", 1)),
-                    qtype=q.get("qtype", "MCQ"),
-                    answer_list=q.get("answer_list"),
-                    answer_num=q.get("answer_num"),
-                    answer_tol=q.get("answer_tol"),
-                    explanation=_strip_nul(q.get("explanation", "")),
-                    year=q.get("year"),
-                    source=_strip_nul(q.get("source")),
-                    verified=bool(q.get("verified", False)),
+            marks = int(q.get("marks", 1))
+            qtype = q.get("qtype", "MCQ")
+            alist = q.get("answer_list")
+            anum = q.get("answer_num")
+            atol = q.get("answer_tol")
+            r = have.get((paper, qid))
+            if r is None:
+                db.add(
+                    models.Question(
+                        paper=paper,
+                        qid=qid,
+                        section=_strip_nul(q.get("section", "")),
+                        text=_strip_nul(q.get("text", "")),
+                        options=_strip_nul(q.get("options", [])),
+                        answer=q.get("answer", 0),
+                        marks=marks,
+                        qtype=qtype,
+                        answer_list=alist,
+                        answer_num=anum,
+                        answer_tol=atol,
+                        explanation=_strip_nul(q.get("explanation", "")),
+                        year=q.get("year"),
+                        source=_strip_nul(q.get("source")),
+                        verified=bool(q.get("verified", False)),
+                    )
                 )
-            )
-            existing.add((paper, qid))
-            created += 1
+                created += 1
+                continue
+            patch = {}
+            if (r.marks or 1) != marks:
+                patch["marks"] = marks
+            if (r.qtype or "MCQ") != qtype:
+                patch["qtype"] = qtype
+            if (r.answer_list or None) != (alist or None):
+                patch["answer_list"] = alist
+            if (r.answer_num or None) != (anum or None):
+                patch["answer_num"] = anum
+            if (r.answer_tol or None) != (atol or None):
+                patch["answer_tol"] = atol
+            if patch:
+                db.query(models.Question).filter_by(id=r.id).update(patch)
     db.commit()
     return created
