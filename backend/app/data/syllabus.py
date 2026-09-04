@@ -209,6 +209,26 @@ SYLLABUS = {
                 "guide": "Focus on parsing table construction and First/Follow sets.",
             },
             {
+                "id": "cs_coa",
+                "name": "Computer Organization & Architecture",
+                "topics": [
+                    "Number systems, cache memory, pipelining",
+                    "Addressing modes, control unit, I/O",
+                    "Instruction formats, hazards, performance",
+                ],
+                "guide": "Cache/pipeline numericals are high-yield. Memorize AMAT and speedup formulas.",
+            },
+            {
+                "id": "cs_digital_logic",
+                "name": "Digital Logic",
+                "topics": [
+                    "Boolean algebra, K-maps, minimization",
+                    "Combinational circuits: mux, decoder, adders",
+                    "Sequential circuits: latches, flip-flops, counters",
+                ],
+                "guide": "K-map grouping and flip-flop excitation tables cover most questions.",
+            },
+            {
                 "id": "cs_aptitude",
                 "name": "General Aptitude (GA)",
                 "topics": [
@@ -245,6 +265,8 @@ SECTION_NOTES = {
     "cs_db": "Normalization (1NF->BCNF removes transitive deps), transaction isolation/serializability via locking. ER -> relational mapping.",
     "cs_networks": "Layer 3 routing, TCP reliable over IP, HTTP over TCP. Drill subnetting and sliding-window numbers.",
     "cs_compiler": "Lexer->tokens, parser (LL/LR tables, FIRST/FOLLOW), semantic analysis. LR uses ACTION/GOTO tables + stack.",
+    "cs_coa": "Cache (AMAT = hit + miss-rate x penalty), 5-stage pipeline, addressing modes. Number-system conversions are free marks.",
+    "cs_digital_logic": "Boolean minimization via K-maps, mux/decoder/adders for combinational; SR/JK/D/T flip-flops, excitation tables, counters for sequential.",
     "cs_aptitude": "Verbal + numerical ability. Grammar rules (subject-verb agreement), vocab, and fast arithmetic (speed/distance, averages, sequences). These are the easiest 15 marks in GATE.",
 }
 
