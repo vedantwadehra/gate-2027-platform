@@ -124,7 +124,7 @@ class Question(Base):
     answer: Mapped[int] = mapped_column(Integer, default=0)
     explanation: Mapped[str] = mapped_column(String(4000), default="")
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
-    source: Mapped[str | None] = mapped_column(String(64), nullable=True)
+    source: Mapped[str | None] = mapped_column(String(256), nullable=True)
     verified: Mapped[bool] = mapped_column(default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime | None] = mapped_column(DateTime, nullable=True)

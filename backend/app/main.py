@@ -52,6 +52,19 @@ def _run_migrations() -> None:
             conn.execute(
                 text("UPDATE users SET is_admin = TRUE WHERE email = 'demo@gatetest.com'")
             )
+        # Widen questions.source (64 -> 256) so test-series provenance fits.
+        # SQLite ignores VARCHAR lengths, so only Postgres needs the ALTER.
+        if "questions" in present and engine.dialect.name == "postgresql":
+            cur = conn.execute(
+                text(
+                    "SELECT character_maximum_length FROM information_schema.columns "
+                    "WHERE table_name='questions' AND column_name='source'"
+                )
+            ).scalar()
+            if cur is not None and cur < 256:
+                conn.execute(
+                    text("ALTER TABLE questions ALTER COLUMN source TYPE VARCHAR(256)")
+                )
         conn.commit()
 
 
