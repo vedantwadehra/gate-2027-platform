@@ -21,6 +21,11 @@ _GATE_QUOTAS = {
     "mcq2": 11, "msq2": 9, "nat2": 10,
 }
 _SET_SEED_SALT = "gate-paper-sets-v1"
+_TOPIC_SEED_SALT = "gate-topic-sets-v1"
+_TOPIC_TARGET = 18  # topic tests aim for 15-20 questions each
+# Legacy (non-numbered) loads are capped so one response never dumps the
+# whole 2,000-question bank on the client. Numbered sets are unaffected.
+_MIXED_CAP = 120
 
 
 def _marks(q: dict) -> int:
@@ -135,6 +140,57 @@ def count_paper_sets(paper: str, db: Session | None = None) -> int:
     return min(len(b[key]) // quota for key, quota in _GATE_QUOTAS.items())
 
 
+def list_topic_sets(paper: str, db: Session | None = None) -> list[dict]:
+    """Per-section topic tests: verified pool split into stable ~18Q sets."""
+    qs = qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
+    pool = _verified_pool(qs)
+    names = {s["id"]: s["name"] for s in syllabus.get_sections(paper)}
+    out = []
+    for sec in sorted({q["section"] for q in pool}):
+        n = sum(1 for q in pool if q["section"] == sec)
+        out.append({
+            "id": sec,
+            "name": names.get(sec, sec),
+            "questions": n,
+            "sets": _topic_chunk_count(n),
+        })
+    return out
+
+
+def _topic_chunk_count(n: int) -> int:
+    if n <= 0:
+        return 0
+    return max(1, round(n / _TOPIC_TARGET))
+
+
+def count_topic_sets(paper: str, section: str, db: Session | None = None) -> int:
+    qs = qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
+    pool = [q for q in _verified_pool(qs) if q["section"] == section]
+    return _topic_chunk_count(len(pool))
+
+
+def build_topic_set(paper: str, section: str, set_idx: int,
+                    db: Session | None = None) -> list[dict]:
+    """Deterministic Nth topic test (1-indexed) for a section: disjoint across
+    sets, stable across calls. Raises ValueError if out of range."""
+    qs = qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
+    pool = [q for q in _verified_pool(qs) if q["section"] == section]
+    total = _topic_chunk_count(len(pool))
+    if set_idx < 1 or set_idx > total:
+        raise ValueError(f"topic set {set_idx} out of range (1..{total})")
+    rng = random.Random(f"{_TOPIC_SEED_SALT}:{paper}:{section}")
+    ordered = _shuffled(pool, rng)
+    # Even split so every set lands near 15-20 questions.
+    base, extra = divmod(len(ordered), total)
+    idx = (set_idx - 1) * base + min(set_idx - 1, extra)
+    size = base + (1 if set_idx <= extra else 0)
+    return ordered[idx: idx + size]
+    """How many complete, non-overlapping 65Q/100-mark GATE-pattern papers fit."""
+    qs = qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
+    b = _split_buckets(_verified_pool(qs), paper)
+    return min(len(b[key]) // quota for key, quota in _GATE_QUOTAS.items())
+
+
 def list_paper_sets(paper: str, db: Session | None = None) -> list[dict]:
     n = count_paper_sets(paper, db)
     return [
@@ -210,14 +266,19 @@ def get_test(
     adaptive: bool = False,
     db: Session | None = None,
     paper_set: int | None = None,
+    topic_set: int | None = None,
 ) -> dict:
     qs = qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
     is_full = mock == "full"
     sets_total = 0
+    topic_sets_total = 0
     if is_full and paper_set:
         qs = build_paper_set(paper, paper_set, db)
     elif is_full:
         qs = _build_full_mock(qs, paper)
+    elif section and topic_set:
+        qs = build_topic_set(paper, section, topic_set, db)
+        topic_sets_total = count_topic_sets(paper, section, db)
     if is_full:
         sets_total = count_paper_sets(paper, db)
     else:
@@ -228,7 +289,7 @@ def get_test(
             qs = [q for q in qs if q["section"] in wanted]
         if verified_only:
             qs = [q for q in qs if q.get("verified")]
-
+    total_matched = len(qs)
     difficulties = _compute_difficulties(db, paper) if db is not None else {}
     if adaptive and db is not None:
         # Bias the set toward weak sections and harder/unknown questions.
@@ -248,6 +309,12 @@ def get_test(
         filtered = [q for q in qs if difficulties.get(q["id"], "medium") in want]
         if filtered:
             qs = filtered
+
+    if not is_full and not (section and topic_set) and len(qs) > _MIXED_CAP:
+        # Legacy mixed/topic-filter loads are capped: a 2,000-question JSON
+        # plus DOM render is the heaviest thing in the app. Numbered paper
+        # and topic sets (the primary paradigm) are unaffected.
+        qs = qs[:_MIXED_CAP]
 
     # Strip correct answer from what the client receives; attach difficulty.
     # MSQ correct sets and NAT values never leave the server (scored here).
@@ -273,6 +340,10 @@ def get_test(
     duration = 180 if is_full else cfg.get("duration_minutes", 30)
     if is_full and paper_set:
         title = f"GATE {paper} Full-Length Paper {paper_set}"
+    elif section and topic_set:
+        sec_name = {s["id"]: s["name"] for s in syllabus.get_sections(paper)}.get(section, section)
+        title = f"GATE {paper} Topic Test: {sec_name} {topic_set}"
+        duration = max(15, round(len(qs) * 180 / 65))
     else:
         title = (f"GATE {paper} Full-Length Mock" if is_full else cfg.get("title", f"{paper} Mock Test"))
     return {
@@ -281,6 +352,9 @@ def get_test(
         "is_full": is_full,
         "paper_set": paper_set,
         "sets_total": sets_total,
+        "topic_set": topic_set,
+        "topic_sets_total": topic_sets_total,
+        "total_matched": total_matched,
         "total_marks": sum(q.get("marks", 0) for q in questions),
         "duration_minutes": duration,
         "title": title,

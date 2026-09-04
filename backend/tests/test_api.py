@@ -223,3 +223,23 @@ def test_msq_nat_scoring(client):
     by_id = {x["id"]: x for x in r2["results"]}
     assert by_id[first_msq]["marks"] == 0 and not by_id[first_msq]["is_correct"]
     assert by_id[first_nat]["marks"] == 0 and not by_id[first_nat]["is_correct"]
+
+
+def test_topic_sets_listed(client):
+    r = client.get("/api/test/CS/topics")
+    assert r.status_code == 200
+    topics = r.json()["topics"]
+    assert len(topics) == 12
+    ds = next(t for t in topics if t["id"] == "cs_ds_algo")
+    assert ds["questions"] > 0 and ds["sets"] >= 1
+
+
+def test_topic_set_build_and_range(client):
+    a = client.get("/api/test/DA?section=da_prob_stats&topic_set=1").json()
+    assert 15 <= len(a["questions"]) <= 25
+    assert a["topic_set"] == 1 and a["topic_sets_total"] >= 1
+    assert all(q["section"] == "da_prob_stats" for q in a["questions"])
+    b = client.get("/api/test/DA?section=da_prob_stats&topic_set=1").json()
+    assert [q["id"] for q in a["questions"]] == [q["id"] for q in b["questions"]]
+    assert client.get("/api/test/DA?section=da_prob_stats&topic_set=9999").status_code == 400
+    assert client.get("/api/test/DA?topic_set=1").status_code == 400

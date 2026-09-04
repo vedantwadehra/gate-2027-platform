@@ -1,7 +1,5 @@
 'use client';
 
-"use client";
-
 import { useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { getToken } from "../../lib/auth";
@@ -39,6 +37,9 @@ type TestData = {
   is_full?: boolean;
   paper_set?: number | null;
   sets_total?: number;
+  topic_set?: number | null;
+  topic_sets_total?: number;
+  total_matched?: number;
   total_marks?: number;
   duration_minutes: number;
   title: string;
@@ -48,6 +49,7 @@ type TestData = {
 
 type PaperSetInfo = { set: number; title: string; total_questions: number; total_marks: number };
 type SectionInfo = { id: string; name: string };
+type TopicInfo = { id: string; name: string; questions: number; sets: number };
 
 type SubmitResponse = {
   score: number;
@@ -91,6 +93,10 @@ export default function TestPage() {
   const [paperSet, setPaperSet] = useState<number | null>(null);
   const [topicSections, setTopicSections] = useState<SectionInfo[]>([]);
   const [topic, setTopic] = useState("all");
+  const [topicSet, setTopicSet] = useState<number | null>(null);
+  const [topicsList, setTopicsList] = useState<TopicInfo[]>([]);
+  const [expandedTopic, setExpandedTopic] = useState<string | null>(null);
+  const [view, setView] = useState<"choose" | "test">("choose");
   const [difficulty, setDifficulty] = useState("any");
   const [adaptive, setAdaptive] = useState(false);
   const [attemptId, setAttemptId] = useState<number | null>(null);
@@ -112,6 +118,14 @@ export default function TestPage() {
     setFullMock(sp.get("mock") === "full" ? true : (ls.fullMock ?? false));
     setPaperSet(sp.get("set") ? parseInt(sp.get("set") as string, 10) : (ls.paperSet ?? null));
     setTopic(sp.get("section") || ls.topic || "all");
+    setTopicSet(sp.get("topic_set") ? parseInt(sp.get("topic_set") as string, 10) : (ls.topicSet ?? null));
+    if (sp.get("mock") === "full" || sp.get("set") || (sp.get("section") && sp.get("topic_set"))) {
+      setView("test");
+    } else if (sp.get("section")) {
+      setView("test");
+    } else {
+      setView("choose");
+    }
     setDifficulty(sp.get("difficulty") || ls.difficulty || "any");
     setAdaptive(sp.get("adaptive") === "1" ? true : (ls.adaptive ?? false));
     setVerifiedOnly(sp.get("verified_only") === "1" ? true : (ls.verifiedOnly ?? false));
@@ -133,17 +147,22 @@ export default function TestPage() {
         });
       })
       .catch(() => {});
+    fetch(`/api/test/${paper}/topics`)
+      .then((r) => (r.ok ? r.json() : { topics: [] }))
+      .then((d) => setTopicsList(d.topics || []))
+      .catch(() => {});
   }, [paper]);
 
   useEffect(() => {
     if (practiceBookmarks) return;
     localStorage.setItem(
       "gate_test_settings",
-      JSON.stringify({ fullMock, paperSet, topic, difficulty, adaptive, verifiedOnly, weakOnly })
+      JSON.stringify({ fullMock, paperSet, topic, topicSet, difficulty, adaptive, verifiedOnly, weakOnly })
     );
-  }, [fullMock, paperSet, topic, difficulty, adaptive, verifiedOnly, weakOnly, practiceBookmarks]);
+  }, [fullMock, paperSet, topic, topicSet, difficulty, adaptive, verifiedOnly, weakOnly, practiceBookmarks]);
 
   useEffect(() => {
+    if (!view || (view !== "test" && !practiceBookmarks)) return;
     const paramsQ = new URLSearchParams();
     let loadUrl: string;
     if (practiceBookmarks) {
@@ -154,6 +173,7 @@ export default function TestPage() {
         if (paperSet) paramsQ.set("set", String(paperSet));
       } else if (topic !== "all") {
         paramsQ.set("section", topic);
+        if (topicSet) paramsQ.set("topic_set", String(topicSet));
       }
       if (adaptive) paramsQ.set("adaptive", "1");
       if (difficulty !== "any") paramsQ.set("difficulty", difficulty);
@@ -175,7 +195,38 @@ export default function TestPage() {
         setLoading(false);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paper, fullMock, paperSet, topic, difficulty, verifiedOnly, weakOnly, practiceBookmarks]);
+  }, [paper, fullMock, paperSet, topic, topicSet, view, difficulty, verifiedOnly, weakOnly, practiceBookmarks]);
+
+  function startFullPaper(n: number) {
+    setPaperSet(n);
+    setFullMock(true);
+    setTopic("all");
+    setTopicSet(null);
+    setView("test");
+  }
+
+  function startTopicTest(sec: string, n: number) {
+    setTopic(sec);
+    setTopicSet(n);
+    setFullMock(false);
+    setPaperSet(null);
+    setView("test");
+  }
+
+  function startMixedPractice() {
+    setFullMock(false);
+    setPaperSet(null);
+    setTopicSet(null);
+    setTopic("all");
+    setView("test");
+  }
+
+  function backToChooser() {
+    setResult(null);
+    setAnswers({});
+    setMarked({});
+    setView("choose");
+  }
 
   useEffect(() => {
     const token = getToken();
@@ -312,14 +363,76 @@ export default function TestPage() {
     }
   }
 
-  if (loading || !data) return <p className="muted">Loading test…</p>;
+  if (loading || !data) {
+    if (view === "choose" && !practiceBookmarks) {
+      return (
+        <div>
+          <h2 className="section-title">
+            GATE {paper} — Choose Your Test
+          </h2>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h3>Full-Length Mock Exams</h3>
+            <p className="muted" style={{ fontSize: 13 }}>
+              65 questions · 100 marks · 180 minutes · real GATE pattern (MCQ/MSQ/NAT)
+            </p>
+            <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+              {paperSets.length === 0 && <span className="muted">Loading papers…</span>}
+              {paperSets.map((p) => (
+                <button key={p.set} className="btn secondary" onClick={() => startFullPaper(p.set)}>
+                  Exam No. {p.set}
+                </button>
+              ))}
+            </div>
+          </div>
+          <div className="card" style={{ marginBottom: 16 }}>
+            <h3>Topic-Wise Mock Tests</h3>
+            <p className="muted" style={{ fontSize: 13 }}>
+              Pick a topic, then a test number. Each test has 15–20 questions.
+            </p>
+            {topicsList.length === 0 && <span className="muted">Loading topics…</span>}
+            {topicsList.map((t) => (
+              <div key={t.id} style={{ marginTop: 10, paddingTop: 10, borderTop: "1px solid var(--border, #eee)" }}>
+                <button className="btn secondary" onClick={() => setExpandedTopic((p) => (p === t.id ? null : t.id))}>
+                  {t.name} · {t.questions} Qs · {t.sets} test{t.sets === 1 ? "" : "s"}
+                </button>
+                {expandedTopic === t.id && (
+                  <div style={{ display: "flex", gap: 8, flexWrap: "wrap", marginTop: 8 }}>
+                    {Array.from({ length: t.sets }, (_, i) => i + 1).map((n) => (
+                      <button key={n} className="btn secondary" onClick={() => startTopicTest(t.id, n)}>
+                        Test No. {n}
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            ))}
+          </div>
+          <div className="card">
+            <h3>Quick Mixed Practice</h3>
+            <p className="muted" style={{ fontSize: 13 }}>
+              A mixed set with filters (verified, weak sections, difficulty, adaptive).
+            </p>
+            <button className="btn" style={{ marginTop: 8 }} onClick={startMixedPractice}>
+              Start Mixed Practice
+            </button>
+          </div>
+        </div>
+      );
+    }
+    return <p className="muted">Loading test…</p>;
+  }
 
   const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
   const ss = String(secondsLeft % 60).padStart(2, "0");
   const unanswered = data.questions.filter((q) => !isAnswered(q)).length;
 
+  const numberedSet = (fullMock && paperSet) || (!fullMock && topic !== "all" && topicSet);
+
   return (
     <div>
+      <button className="btn secondary" onClick={backToChooser} style={{ marginBottom: 12 }}>
+        ← All {paper} tests
+      </button>
       <h2 className="section-title">
         {data.title}{" "}
         <span className="paper-pill">
@@ -329,39 +442,25 @@ export default function TestPage() {
         </span>
       </h2>
 
-      {!result && !practiceBookmarks && (
+      {!result && !practiceBookmarks && !numberedSet && (
         <div className="filterbar">
-          {!fullMock && (
-            <>
-              <label className="filtertoggle">
-                Topic:
-                <select value={topic} onChange={(e) => setTopic(e.target.value)}>
-                  <option value="all">All topics (mixed)</option>
-                  {topicSections.map((s) => (
-                    <option key={s.id} value={s.id}>{s.name}</option>
-                  ))}
-                </select>
-              </label>
-              <label className="filtertoggle">
-                <input type="checkbox" checked={verifiedOnly} onChange={(e) => setVerifiedOnly(e.target.checked)} />
-                Verified PYQs only
-              </label>
-              <label className="filtertoggle">
-                <input type="checkbox" checked={weakOnly} onChange={(e) => setWeakOnly(e.target.checked)} />
-                Focus my weak sections
-              </label>
-            </>
-          )}
-          {fullMock && paperSets.length > 0 && (
-            <label className="filtertoggle">
-              Full paper:
-              <select value={paperSet ?? 1} onChange={(e) => setPaperSet(parseInt(e.target.value, 10))}>
-                {paperSets.map((p) => (
-                  <option key={p.set} value={p.set}>Paper {p.set} · 65Q · 100 marks</option>
-                ))}
-              </select>
-            </label>
-          )}
+          <label className="filtertoggle">
+            Topic:
+            <select value={topic} onChange={(e) => setTopic(e.target.value)}>
+              <option value="all">All topics (mixed)</option>
+              {topicSections.map((s) => (
+                <option key={s.id} value={s.id}>{s.name}</option>
+              ))}
+            </select>
+          </label>
+          <label className="filtertoggle">
+            <input type="checkbox" checked={verifiedOnly} onChange={(e) => setVerifiedOnly(e.target.checked)} />
+            Verified PYQs only
+          </label>
+          <label className="filtertoggle">
+            <input type="checkbox" checked={weakOnly} onChange={(e) => setWeakOnly(e.target.checked)} />
+            Focus my weak sections
+          </label>
           <label className="filtertoggle">
             Difficulty:
             <select value={difficulty} onChange={(e) => setDifficulty(e.target.value)}>
@@ -375,14 +474,13 @@ export default function TestPage() {
             <input type="checkbox" checked={adaptive} onChange={(e) => setAdaptive(e.target.checked)} />
             Adaptive (focus weak areas)
           </label>
-          <button className="btn secondary" onClick={() => setFullMock((v) => !v)}>
-            {fullMock ? "Exit full mock" : "Full-length Mock (65Q/180m)"}
-          </button>
-          {fullMock && (
-            <span className="muted" style={{ fontSize: 12 }}>GATE pattern: 10 GA + 55 subject (MCQ/MSQ/NAT) · 100 marks · MCQ −1/3, MSQ/NAT no negative</span>
-          )}
-          {(verifiedOnly || weakOnly || difficulty !== "any" || fullMock) && (
-            <span className="muted" style={{ fontSize: 12 }}>{data.questions.length} questions matched</span>
+          {(verifiedOnly || weakOnly || difficulty !== "any") && (
+            <span className="muted" style={{ fontSize: 12 }}>
+              Showing {data.questions.length}
+              {typeof data.total_matched === "number" && data.total_matched > data.questions.length
+                ? ` of ${data.total_matched} matched — pick a numbered topic test for the rest`
+                : " questions matched"}
+            </span>
           )}
         </div>
       )}

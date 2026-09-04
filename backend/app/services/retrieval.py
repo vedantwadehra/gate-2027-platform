@@ -9,8 +9,6 @@ import math
 import re
 from collections import Counter
 
-import numpy as np
-
 from app.data import syllabus
 from app.data import questions as qb
 
@@ -44,10 +42,22 @@ def _build_chunks(paper: str) -> list[dict]:
     except Exception:
         qlist = qb.QUESTIONS.get(paper, [])
     for q in qlist:
+        qt = (q.get("qtype") or "MCQ").upper()
+        opts = q.get("options") or []
+        if qt == "MSQ":
+            idxs = q.get("answer_list") or [q.get("answer", 0)]
+            ans = ", ".join(
+                opts[i] for i in idxs if isinstance(i, int) and 0 <= i < len(opts)
+            )
+        elif qt == "NAT":
+            ans = str(q.get("answer_num"))
+        else:
+            ai = q.get("answer", 0)
+            ans = opts[ai] if isinstance(ai, int) and 0 <= ai < len(opts) else ""
         body = (
             f"Practice question ({q['section']}): {q['text']}\n"
-            f"Options: {q['options']}\n"
-            f"Answer: {q['options'][q['answer']]}\n"
+            f"Options: {opts}\n"
+            f"Answer: {ans}\n"
             f"Explanation: {q['explanation']}"
         )
         chunks.append({"paper": paper, "section": q["section"], "text": body})
@@ -60,6 +70,9 @@ def invalidate_index(paper: str) -> None:
 
 
 class _Index:
+    """Sparse TF-IDF with an inverted index: same cosine ranking as the old
+    dense numpy version at a fraction of the memory (~MBs, not ~100MB)."""
+
     def __init__(self, chunks: list[dict]):
         self.chunks = chunks
         docs = [_tokenize(c["text"]) for c in chunks]
@@ -67,31 +80,34 @@ class _Index:
         for tokens in docs:
             for term in set(tokens):
                 df[term] += 1
-        self.df = df
-        self.idf = {
-            term: math.log((len(docs) + 1) / (cnt + 1)) + 1
-            for term, cnt in df.items()
-        }
-        self.vectors = np.array(
-            [self._tfidf_vec(tokens) for tokens in docs], dtype=np.float32
-        )
-        # Normalize for cosine similarity.
-        norms = np.linalg.norm(self.vectors, axis=1, keepdims=True)
-        norms[norms == 0] = 1.0
-        self.vectors /= norms
+        n = len(docs)
+        self.idf = {t: math.log((n + 1) / (c + 1)) + 1 for t, c in df.items()}
+        self.norms: list[float] = []
+        self.postings: dict[str, list[tuple[int, float]]] = {}
+        for i, tokens in enumerate(docs):
+            tf = Counter(tokens)
+            norm_sq = 0.0
+            for term, cnt in tf.items():
+                w = (1 + math.log(cnt)) * self.idf[term]
+                norm_sq += w * w
+                self.postings.setdefault(term, []).append((i, w))
+            self.norms.append(math.sqrt(norm_sq) or 1.0)
 
-    def _tfidf_vec(self, tokens: list[str]) -> np.ndarray:
+    def topk(self, tokens: list[str], k: int) -> list[str]:
         tf = Counter(tokens)
-        dim = max(self.df.keys(), default="")
-        size = len(self.df)
-        vec = np.zeros(size, dtype=np.float32)
-        if size == 0:
-            return vec
-        term_to_idx = {t: i for i, t in enumerate(self.df.keys())}
+        qvec = {}
         for term, cnt in tf.items():
-            if term in term_to_idx:
-                vec[term_to_idx[term]] = (1 + math.log(cnt)) * self.idf[term]
-        return vec
+            if term in self.idf:
+                qvec[term] = (1 + math.log(cnt)) * self.idf[term]
+        qnorm = math.sqrt(sum(w * w for w in qvec.values()))
+        if qnorm == 0 or not self.chunks:
+            return []
+        scores: dict[int, float] = {}
+        for term, qw in qvec.items():
+            for i, dw in self.postings.get(term, ()):
+                scores[i] = scores.get(i, 0.0) + qw * dw
+        ranked = sorted(scores.items(), key=lambda kv: (-kv[1] / self.norms[kv[0]], kv[0]))
+        return [self.chunks[i]["text"] for i, _ in ranked[:k] if scores[i] > 0]
 
 
 _INDEXES: dict[str, _Index] = {}
@@ -116,10 +132,4 @@ def retrieve(paper: str, query: str, k: int = 4) -> list[str]:
     index = _get_index(paper)
     if not index.chunks:
         return []
-    q_vec = index._tfidf_vec(_tokenize(query))
-    q_norm = np.linalg.norm(q_vec)
-    if q_norm > 0:
-        q_vec = q_vec / q_norm
-    sims = index.vectors @ q_vec
-    top = np.argsort(-sims)[:k]
-    return [index.chunks[int(i)]["text"] for i in top if sims[i] > 0]
+    return index.topk(_tokenize(query), k)

@@ -38,6 +38,8 @@ export default function Navbar() {
         <Link href="/">Home</Link>
         <Link href="/guide/DA">DA Guide</Link>
         <Link href="/guide/CS">CS Guide</Link>
+        <Link href="/test/DA">DA Tests</Link>
+        <Link href="/test/CS">CS Tests</Link>
         <Link href="/chat">AI Tutor</Link>
         <Link href="/my-questions">My Questions</Link>
         <Link href="/review">Review</Link>

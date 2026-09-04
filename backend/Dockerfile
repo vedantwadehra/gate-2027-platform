@@ -5,9 +5,9 @@ ENV PYTHONUNBUFFERED=1 \
 
 WORKDIR /app
 
-# System deps for OCR / PDF text extraction used by notes import.
+# tesseract powers chat image OCR; poppler is dev-only (ocr_pdf.py) so not installed.
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    tesseract-ocr poppler-utils \
+    tesseract-ocr \
     && rm -rf /var/lib/apt/lists/*
 
 # Build context is the repo root (Render), so reference backend/ paths.

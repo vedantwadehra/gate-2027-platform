@@ -22,13 +22,13 @@ export default function HomePage() {
         </div>
         <div className="card">
           <h3>Mock Test — DA</h3>
-          <p>Timed practice with instant scoring and explanations.</p>
-          <a className="btn secondary" href="/test/DA">Start DA Test</a>
+          <p>Full-length papers (65Q/100m) and topic-wise tests with GATE scoring.</p>
+          <a className="btn secondary" href="/test/DA">Choose DA Test</a>
         </div>
         <div className="card">
           <h3>Mock Test — CS</h3>
-          <p>Attempt CS questions and review detailed solutions.</p>
-          <a className="btn secondary" href="/test/CS">Start CS Test</a>
+          <p>Full-length papers and topic-wise tests with detailed solutions.</p>
+          <a className="btn secondary" href="/test/CS">Choose CS Test</a>
         </div>
         <div className="card">
           <h3>AI Tutor</h3>

@@ -106,6 +106,13 @@ def get_syllabus(paper: str):
 
 
 # ---------- Mock tests ----------
+@api.get("/test/{paper}/topics")
+def list_test_topics(paper: str, db: Session = Depends(get_db)):
+    if paper not in ("DA", "CS"):
+        raise HTTPException(404, "Unknown paper")
+    return {"paper": paper, "topics": test_service.list_topic_sets(paper, db)}
+
+
 @api.get("/test/{paper}/papers")
 def list_test_papers(paper: str, db: Session = Depends(get_db)):
     if paper not in ("DA", "CS"):
@@ -132,11 +139,14 @@ def get_test(
     adaptive: bool = False,
     weak: bool = False,
     paper_set: int | None = Query(default=None, alias="set"),
+    topic_set: int | None = None,
     user: dict | None = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
     if paper not in ("DA", "CS"):
         raise HTTPException(404, "Unknown paper")
+    if topic_set is not None and not section:
+        raise HTTPException(400, "topic_set requires a section")
     # Weak-sections mode: build a set of the user's weakest sections and
     # filter the test to those (requires auth + prior attempts).
     if weak and user is not None:
@@ -165,7 +175,7 @@ def get_test(
     try:
         return test_service.get_test(
             paper, section, sections, verified_only, difficulty, mock, adaptive, db,
-            paper_set=paper_set,
+            paper_set=paper_set, topic_set=topic_set,
         )
     except ValueError as e:
         raise HTTPException(400, str(e))
