@@ -1,6 +1,7 @@
-from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form
+from fastapi import APIRouter, Depends, HTTPException, File, UploadFile, Form, Query
 from fastapi.responses import StreamingResponse, Response
 from pydantic import BaseModel
+from typing import Any
 import json
 import io
 import hashlib
@@ -56,8 +57,10 @@ def _cache_set(db: Session, key: str, value: str) -> None:
 # ---------- Schemas ----------
 class SubmitTest(BaseModel):
     paper: str
-    answers: dict[str, int]
+    # MCQ -> option index; MSQ -> list of option indices; NAT -> number.
+    answers: dict[str, Any]
     user_id: int | None = None
+    qids: list[str] | None = None
 
 
 class ChatRequest(BaseModel):
@@ -103,6 +106,21 @@ def get_syllabus(paper: str):
 
 
 # ---------- Mock tests ----------
+@api.get("/test/{paper}/papers")
+def list_test_papers(paper: str, db: Session = Depends(get_db)):
+    if paper not in ("DA", "CS"):
+        raise HTTPException(404, "Unknown paper")
+    from app.data import syllabus
+    return {
+        "paper": paper,
+        "sets": test_service.list_paper_sets(paper, db),
+        "sections": [
+            {"id": s["id"], "name": s["name"]}
+            for s in syllabus.get_sections(paper)
+        ],
+    }
+
+
 @api.get("/test/{paper}")
 def get_test(
     paper: str,
@@ -113,6 +131,7 @@ def get_test(
     mock: str | None = None,
     adaptive: bool = False,
     weak: bool = False,
+    paper_set: int | None = Query(default=None, alias="set"),
     user: dict | None = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
@@ -143,9 +162,13 @@ def get_test(
             weak_secs = [min(sec_acc.items(), key=lambda kv: kv[1]["correct"] / kv[1]["total"])[0]]
         if weak_secs:
             sections = ",".join(weak_secs)
-    return test_service.get_test(
-        paper, section, sections, verified_only, difficulty, mock, adaptive, db
-    )
+    try:
+        return test_service.get_test(
+            paper, section, sections, verified_only, difficulty, mock, adaptive, db,
+            paper_set=paper_set,
+        )
+    except ValueError as e:
+        raise HTTPException(400, str(e))
 
 
 @api.post("/test/submit")
@@ -158,7 +181,8 @@ def submit_test(
         raise HTTPException(400, "Unknown paper")
     user_id = user["sub"] if user else payload.user_id
     return test_service.score_and_save(
-        db, payload.paper, payload.answers, int(user_id) if user_id else None
+        db, payload.paper, payload.answers, int(user_id) if user_id else None,
+        qids=payload.qids,
     )
 
 
@@ -181,14 +205,21 @@ def export_attempt_pdf(
         raise HTTPException(403, "Not your attempt")
     lines: list[str] = []
     lines.append(f"Paper: GATE {attempt.paper}")
-    lines.append(f"Score: {attempt.score}%  ({attempt.correct}/{attempt.total} correct)")
+    det = attempt.details or {}
+    if "marks_obtained" in det and "max_marks" in det:
+        lines.append(
+            f"Score: {attempt.score}%  ({attempt.correct}/{attempt.total} correct, "
+            f"{det['marks_obtained']}/{det['max_marks']} marks)"
+        )
+    else:
+        lines.append(f"Score: {attempt.score}%  ({attempt.correct}/{attempt.total} correct)")
     lines.append(f"Date: {attempt.created_at.strftime('%Y-%m-%d %H:%M')}")
     lines.append("")
     qmap = {
         q.qid: q
         for q in db.query(models.Question).filter_by(paper=attempt.paper).all()
     }
-    for i, qa in enumerate((attempt.details or {}).get("questions", []), 1):
+    for i, qa in enumerate(det.get("questions", []), 1):
         q = qmap.get(qa["id"])
         if not q:
             continue
@@ -196,9 +227,18 @@ def export_attempt_pdf(
             f"Q{i}. {'CORRECT' if qa['is_correct'] else 'WRONG'}  ({q.section})"
         )
         lines.append("  " + q.text)
-        for oi, opt in enumerate(q.options):
-            mark = ">" if oi == q.answer else " "
-            lines.append(f"    {mark} {chr(65 + oi)}. {opt}")
+        qt = q.qtype or "MCQ"
+        if qt == "MSQ":
+            ok = set(q.answer_list or [])
+            for oi, opt in enumerate(q.options):
+                mark = ">" if oi in ok else " "
+                lines.append(f"    {mark} {chr(65 + oi)}. {opt}")
+        elif qt == "NAT":
+            lines.append(f"    Correct value: {q.answer_num}")
+        else:
+            for oi, opt in enumerate(q.options):
+                mark = ">" if oi == q.answer else " "
+                lines.append(f"    {mark} {chr(65 + oi)}. {opt}")
         lines.append("")
     pdf_bytes = pdf_util.make_pdf(lines, title=f"GATE {attempt.paper} Result")
     return Response(

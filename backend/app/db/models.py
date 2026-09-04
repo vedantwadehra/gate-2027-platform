@@ -122,6 +122,11 @@ class Question(Base):
     text: Mapped[str] = mapped_column(String(4000))
     options: Mapped[list] = mapped_column(JSON)
     answer: Mapped[int] = mapped_column(Integer, default=0)
+    marks: Mapped[int] = mapped_column(Integer, default=1)
+    qtype: Mapped[str] = mapped_column(String(8), default="MCQ")
+    answer_list: Mapped[list | None] = mapped_column(JSON, nullable=True)
+    answer_num: Mapped[float | None] = mapped_column(Float, nullable=True)
+    answer_tol: Mapped[float | None] = mapped_column(Float, nullable=True)
     explanation: Mapped[str] = mapped_column(String(4000), default="")
     year: Mapped[int | None] = mapped_column(Integer, nullable=True)
     source: Mapped[str | None] = mapped_column(String(256), nullable=True)
@@ -140,6 +145,11 @@ class Question(Base):
             "text": self.text,
             "options": self.options,
             "answer": self.answer,
+            "marks": self.marks if self.marks is not None else 1,
+            "qtype": self.qtype or "MCQ",
+            "answer_list": self.answer_list,
+            "answer_num": self.answer_num,
+            "answer_tol": self.answer_tol,
             "explanation": self.explanation,
             "year": self.year,
             "source": self.source,

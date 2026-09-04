@@ -87,3 +87,139 @@ def test_llm_cache_roundtrip():
         assert routes._cache_get(db, key) == "cached-value"
     finally:
         db.close()
+
+
+def _true_answers(qids):
+    db = SessionLocal()
+    try:
+        rows = db.query(models.Question).filter(models.Question.qid.in_(qids)).all()
+        return {r.qid: r.answer for r in rows}
+    finally:
+        db.close()
+
+
+def test_paper_sets_listed(client):
+    for paper in ("DA", "CS"):
+        r = client.get(f"/api/test/{paper}/papers")
+        assert r.status_code == 200
+        body = r.json()
+        assert len(body["sets"]) >= 1
+        assert body["sets"][0]["total_marks"] == 100
+        assert body["sets"][0]["total_questions"] == 65
+        assert len(body["sections"]) >= 8
+
+
+def test_paper_set_gate_pattern_and_stability(client):
+    a = client.get("/api/test/DA?mock=full&set=1").json()
+    b = client.get("/api/test/DA?mock=full&set=1").json()
+    assert len(a["questions"]) == 65
+    assert a["total_marks"] == 100
+    assert a["paper_set"] == 1 and a["sets_total"] >= 1
+    assert [q["id"] for q in a["questions"]] == [q["id"] for q in b["questions"]]
+    assert all(q["section"] == "da_aptitude" for q in a["questions"][:10])
+    assert [q["marks"] for q in a["questions"][:5]] == [1] * 5
+    assert [q["marks"] for q in a["questions"][5:10]] == [2] * 5
+    assert [q["marks"] for q in a["questions"][10:35]] == [1] * 25
+    assert [q["marks"] for q in a["questions"][35:]] == [2] * 30
+    if a["sets_total"] > 1:
+        c = client.get("/api/test/DA?mock=full&set=2").json()
+        assert not (set(q["id"] for q in a["questions"]) & set(q["id"] for q in c["questions"]))
+
+
+def test_paper_set_invalid(client):
+    assert client.get("/api/test/DA?mock=full&set=9999").status_code == 400
+
+
+def _full_correct(qids):
+    """Type-correct perfect answers: MCQ index, MSQ index list, NAT number."""
+    db = SessionLocal()
+    try:
+        rows = db.query(models.Question).filter(models.Question.qid.in_(qids)).all()
+        out = {}
+        for r in rows:
+            qt = r.qtype or "MCQ"
+            if qt == "MSQ":
+                out[r.qid] = sorted(r.answer_list)
+            elif qt == "NAT":
+                out[r.qid] = r.answer_num
+            else:
+                out[r.qid] = r.answer
+        return out
+    finally:
+        db.close()
+
+
+def test_submit_marks_math(client):
+    t = client.get("/api/test/CS?mock=full&set=1").json()
+    qs = t["questions"]
+    qids = [q["id"] for q in qs]
+    truth = _full_correct(qids)
+    assert len(truth) == 65
+    marks = {q["id"]: q["marks"] for q in qs}
+    qtype = {q["id"]: q.get("qtype", "MCQ") for q in qs}
+    # All correct -> full marks.
+    r = client.post("/api/test/submit", json={"paper": "CS", "answers": truth, "qids": qids}).json()
+    assert r["correct"] == 65 and r["total"] == 65
+    assert r["marks_obtained"] == 100 and r["max_marks"] == 100
+    # All wrong -> MCQ -1/3 each; MSQ/NAT zero (no negative marking).
+    wrong = {}
+    for qid, ans in truth.items():
+        if qtype[qid] == "MSQ":
+            wrong[qid] = [(ans[0] + 1) % 4] if ans else [0]
+        elif qtype[qid] == "NAT":
+            wrong[qid] = ans + 1000
+        else:
+            wrong[qid] = (ans + 1) % 4
+    r2 = client.post("/api/test/submit", json={"paper": "CS", "answers": wrong, "qids": qids}).json()
+    expected = round(sum(-round(marks[q] / 3, 2) for q in qids if qtype[q] == "MCQ"), 2)
+    assert r2["correct"] == 0 and r2["marks_obtained"] == expected
+    # Skipped -> zero.
+    r3 = client.post("/api/test/submit", json={"paper": "CS", "answers": {}, "qids": qids[:5]}).json()
+    assert r3["total"] == 5 and r3["marks_obtained"] == 0
+    assert r3["max_marks"] == sum(marks[q] for q in qids[:5])
+
+
+def test_paper_set_type_mix(client):
+    from collections import Counter
+    for paper in ("DA", "CS"):
+        body = client.get(f"/api/test/{paper}?mock=full&set=1").json()
+        tc = Counter((q.get("qtype", "MCQ"), q["marks"]) for q in body["questions"])
+        assert len(body["questions"]) == 65
+        assert sum(q["marks"] for q in body["questions"]) == 100
+        assert tc[("MSQ", 1)] == 5 and tc[("MSQ", 2)] == 9
+        assert tc[("NAT", 1)] == 6 and tc[("NAT", 2)] == 10
+        assert all(q["section"].endswith("aptitude") for q in body["questions"][:10])
+
+
+def test_msq_nat_scoring(client):
+    t = client.get("/api/test/DA?mock=full&set=1").json()
+    msqs = [q for q in t["questions"] if q.get("qtype") == "MSQ"][:3]
+    nats = [q for q in t["questions"] if q.get("qtype") == "NAT"][:3]
+    assert msqs and nats
+    db = SessionLocal()
+    try:
+        rows = db.query(models.Question).filter(
+            models.Question.qid.in_([q["id"] for q in msqs + nats])).all()
+        truth = {r.qid: r for r in rows}
+    finally:
+        db.close()
+    qids = [q["id"] for q in msqs + nats]
+    # All correct: MSQ exact sets + NAT exact values.
+    answers = {}
+    for q in msqs:
+        answers[q["id"]] = sorted(truth[q["id"]].answer_list)
+    for q in nats:
+        answers[q["id"]] = truth[q["id"]].answer_num
+    r = client.post("/api/test/submit", json={"paper": "DA", "answers": answers, "qids": qids}).json()
+    assert r["correct"] == len(qids)
+    assert r["marks_obtained"] == r["max_marks"]
+    # MSQ partial (drop one option) scores zero; NAT far outside tolerance scores zero.
+    partial = dict(answers)
+    first_msq = msqs[0]["id"]
+    partial[first_msq] = sorted(truth[first_msq].answer_list)[:-1]
+    first_nat = nats[0]["id"]
+    partial[first_nat] = (truth[first_nat].answer_num or 0) + 1000
+    r2 = client.post("/api/test/submit", json={"paper": "DA", "answers": partial, "qids": qids}).json()
+    by_id = {x["id"]: x for x in r2["results"]}
+    assert by_id[first_msq]["marks"] == 0 and not by_id[first_msq]["is_correct"]
+    assert by_id[first_nat]["marks"] == 0 and not by_id[first_nat]["is_correct"]

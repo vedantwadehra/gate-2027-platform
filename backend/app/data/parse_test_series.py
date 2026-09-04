@@ -267,7 +267,7 @@ def parse_go():
             images = q.get("images", []) or []
             crop_images = q.get("crop_images", []) or []
             text = strip_html(q.get("stem", ""))
-            opt_list = [strip_html(opts.get(l, "")) for l in "ABCD"] if qtype == "MCQ" else []
+            opt_list = [strip_html(opts.get(l, "")) for l in "ABCD"] if qtype in ("MCQ", "MSQ") else []
             correct = q.get("correct", []) or []
             tag = q.get("tag")
             # Institute's own tag is authoritative; keywords only fill gaps.
@@ -312,6 +312,9 @@ def parse_madeeasy(limit: int = 0):
                 continue
             qnum, qtype, correct = int(m.group(1)), m.group(2), m.group(3).strip()
             tm = re.search(r'<div class="qtext">(.*?)</div>\s*<div class="opts">', card, flags=re.S)
+            if not tm:
+                # NAT cards have no options block; match the qtext close only.
+                tm = re.search(r'<div class="qtext">(.*?)</div>', card, flags=re.S)
             stem_html = tm.group(1) if tm else ""
             opts = []
             # ANY <img> (data:, CDN, relative) means figure-dependent: mapping only.

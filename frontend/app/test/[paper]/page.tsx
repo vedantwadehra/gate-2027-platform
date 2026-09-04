@@ -11,6 +11,8 @@ type Question = {
   section: string;
   text: string;
   options: string[];
+  marks: number;
+  qtype: "MCQ" | "MSQ" | "NAT";
   year?: number | null;
   source?: string | null;
   verified?: boolean;
@@ -19,9 +21,15 @@ type Question = {
 
 type ResultItem = {
   id: string;
-  chosen: number | null;
-  correct_option: string;
+  qtype?: "MCQ" | "MSQ" | "NAT";
+  chosen: number | number[] | string | null;
+  correct_option: string | null;
+  correct_options?: string[] | null;
+  correct_value?: number | null;
+  correct_tol?: number | null;
   is_correct: boolean;
+  marks: number;
+  max_marks: number;
   explanation: string;
 };
 
@@ -29,16 +37,24 @@ type TestData = {
   paper: string;
   section: string | null;
   is_full?: boolean;
+  paper_set?: number | null;
+  sets_total?: number;
+  total_marks?: number;
   duration_minutes: number;
   title: string;
   section_names: Record<string, string>;
   questions: Question[];
 };
 
+type PaperSetInfo = { set: number; title: string; total_questions: number; total_marks: number };
+type SectionInfo = { id: string; name: string };
+
 type SubmitResponse = {
   score: number;
   correct: number;
   total: number;
+  marks_obtained: number;
+  max_marks: number;
   results: ResultItem[];
 };
 
@@ -61,7 +77,7 @@ export default function TestPage() {
   const [practiceBookmarks, setPracticeBookmarks] = useState(false);
 
   const [data, setData] = useState<TestData | null>(null);
-  const [answers, setAnswers] = useState<Record<string, number>>({});
+  const [answers, setAnswers] = useState<Record<string, number | number[] | string>>({});
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<SubmitResponse | null>(null);
@@ -71,6 +87,10 @@ export default function TestPage() {
   const [verifiedOnly, setVerifiedOnly] = useState(false);
   const [weakOnly, setWeakOnly] = useState(false);
   const [fullMock, setFullMock] = useState(false);
+  const [paperSets, setPaperSets] = useState<PaperSetInfo[]>([]);
+  const [paperSet, setPaperSet] = useState<number | null>(null);
+  const [topicSections, setTopicSections] = useState<SectionInfo[]>([]);
+  const [topic, setTopic] = useState("all");
   const [difficulty, setDifficulty] = useState("any");
   const [adaptive, setAdaptive] = useState(false);
   const [attemptId, setAttemptId] = useState<number | null>(null);
@@ -90,6 +110,8 @@ export default function TestPage() {
     else setPaper(paramsPaper);
     const ls = JSON.parse(localStorage.getItem("gate_test_settings") || "{}");
     setFullMock(sp.get("mock") === "full" ? true : (ls.fullMock ?? false));
+    setPaperSet(sp.get("set") ? parseInt(sp.get("set") as string, 10) : (ls.paperSet ?? null));
+    setTopic(sp.get("section") || ls.topic || "all");
     setDifficulty(sp.get("difficulty") || ls.difficulty || "any");
     setAdaptive(sp.get("adaptive") === "1" ? true : (ls.adaptive ?? false));
     setVerifiedOnly(sp.get("verified_only") === "1" ? true : (ls.verifiedOnly ?? false));
@@ -98,12 +120,28 @@ export default function TestPage() {
   }, [paramsPaper]);
 
   useEffect(() => {
+    fetch(`/api/test/${paper}/papers`)
+      .then((r) => (r.ok ? r.json() : { sets: [], sections: [] }))
+      .then((d) => {
+        setPaperSets(d.sets || []);
+        setTopicSections(d.sections || []);
+        setPaperSet((prev) => {
+          const total = (d.sets || []).length;
+          if (!total) return null;
+          if (prev && prev >= 1 && prev <= total) return prev;
+          return 1;
+        });
+      })
+      .catch(() => {});
+  }, [paper]);
+
+  useEffect(() => {
     if (practiceBookmarks) return;
     localStorage.setItem(
       "gate_test_settings",
-      JSON.stringify({ fullMock, difficulty, adaptive, verifiedOnly, weakOnly })
+      JSON.stringify({ fullMock, paperSet, topic, difficulty, adaptive, verifiedOnly, weakOnly })
     );
-  }, [fullMock, difficulty, adaptive, verifiedOnly, weakOnly, practiceBookmarks]);
+  }, [fullMock, paperSet, topic, difficulty, adaptive, verifiedOnly, weakOnly, practiceBookmarks]);
 
   useEffect(() => {
     const paramsQ = new URLSearchParams();
@@ -111,7 +149,12 @@ export default function TestPage() {
     if (practiceBookmarks) {
       loadUrl = `/api/bookmarks/test?paper=${paper}`;
     } else {
-      if (fullMock) paramsQ.set("mock", "full");
+      if (fullMock) {
+        paramsQ.set("mock", "full");
+        if (paperSet) paramsQ.set("set", String(paperSet));
+      } else if (topic !== "all") {
+        paramsQ.set("section", topic);
+      }
       if (adaptive) paramsQ.set("adaptive", "1");
       if (difficulty !== "any") paramsQ.set("difficulty", difficulty);
       if (verifiedOnly) paramsQ.set("verified_only", "1");
@@ -132,7 +175,7 @@ export default function TestPage() {
         setLoading(false);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paper, fullMock, difficulty, verifiedOnly, weakOnly, practiceBookmarks]);
+  }, [paper, fullMock, paperSet, topic, difficulty, verifiedOnly, weakOnly, practiceBookmarks]);
 
   useEffect(() => {
     const token = getToken();
@@ -166,6 +209,30 @@ export default function TestPage() {
   function choose(qid: string, optIdx: number) {
     if (result) return;
     setAnswers((prev) => ({ ...prev, [qid]: optIdx }));
+  }
+
+  function toggleMSQ(qid: string, optIdx: number) {
+    if (result) return;
+    setAnswers((prev) => {
+      const cur = prev[qid];
+      const set = new Set(Array.isArray(cur) ? cur : []);
+      if (set.has(optIdx)) set.delete(optIdx);
+      else set.add(optIdx);
+      return { ...prev, [qid]: [...set].sort((a, b) => a - b) };
+    });
+  }
+
+  function answerNAT(qid: string, value: string) {
+    if (result) return;
+    setAnswers((prev) => ({ ...prev, [qid]: value }));
+  }
+
+  function isAnswered(q: Question): boolean {
+    const a = answers[q.id];
+    if (a === undefined || a === null) return false;
+    if (Array.isArray(a)) return a.length > 0;
+    if (typeof a === "string") return a.trim() !== "";
+    return true;
   }
 
   function toggleMark(qid: string) {
@@ -207,7 +274,7 @@ export default function TestPage() {
     const res = await fetch("/api/test/submit", {
       method: "POST",
       headers,
-      body: JSON.stringify({ paper, answers }),
+      body: JSON.stringify({ paper, answers, qids: data.questions.map((q) => q.id) }),
     });
     const r = await res.json();
     setResult(r);
@@ -249,7 +316,7 @@ export default function TestPage() {
 
   const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
   const ss = String(secondsLeft % 60).padStart(2, "0");
-  const unanswered = data.questions.filter((q) => answers[q.id] === undefined).length;
+  const unanswered = data.questions.filter((q) => !isAnswered(q)).length;
 
   return (
     <div>
@@ -258,6 +325,7 @@ export default function TestPage() {
         <span className="paper-pill">
           {data.questions.length} Qs · {data.duration_minutes}m
           {data.is_full ? " · Full Mock" : ""}
+          {typeof data.total_marks === "number" && data.total_marks > 0 ? ` · ${data.total_marks} marks` : ""}
         </span>
       </h2>
 
@@ -265,6 +333,15 @@ export default function TestPage() {
         <div className="filterbar">
           {!fullMock && (
             <>
+              <label className="filtertoggle">
+                Topic:
+                <select value={topic} onChange={(e) => setTopic(e.target.value)}>
+                  <option value="all">All topics (mixed)</option>
+                  {topicSections.map((s) => (
+                    <option key={s.id} value={s.id}>{s.name}</option>
+                  ))}
+                </select>
+              </label>
               <label className="filtertoggle">
                 <input type="checkbox" checked={verifiedOnly} onChange={(e) => setVerifiedOnly(e.target.checked)} />
                 Verified PYQs only
@@ -274,6 +351,16 @@ export default function TestPage() {
                 Focus my weak sections
               </label>
             </>
+          )}
+          {fullMock && paperSets.length > 0 && (
+            <label className="filtertoggle">
+              Full paper:
+              <select value={paperSet ?? 1} onChange={(e) => setPaperSet(parseInt(e.target.value, 10))}>
+                {paperSets.map((p) => (
+                  <option key={p.set} value={p.set}>Paper {p.set} · 65Q · 100 marks</option>
+                ))}
+              </select>
+            </label>
           )}
           <label className="filtertoggle">
             Difficulty:
@@ -291,6 +378,9 @@ export default function TestPage() {
           <button className="btn secondary" onClick={() => setFullMock((v) => !v)}>
             {fullMock ? "Exit full mock" : "Full-length Mock (65Q/180m)"}
           </button>
+          {fullMock && (
+            <span className="muted" style={{ fontSize: 12 }}>GATE pattern: 10 GA + 55 subject (MCQ/MSQ/NAT) · 100 marks · MCQ −1/3, MSQ/NAT no negative</span>
+          )}
           {(verifiedOnly || weakOnly || difficulty !== "any" || fullMock) && (
             <span className="muted" style={{ fontSize: 12 }}>{data.questions.length} questions matched</span>
           )}
@@ -318,7 +408,7 @@ export default function TestPage() {
       {!result && (
         <div className="palette">
           {data.questions.map((q, qi) => {
-            const st = marked[q.id] ? "mark" : answers[q.id] !== undefined ? "ans" : "unans";
+            const st = marked[q.id] ? "mark" : isAnswered(q) ? "ans" : "unans";
             return (
               <button
                 key={q.id}
@@ -335,9 +425,15 @@ export default function TestPage() {
 
       {result && (
         <div className="result-banner">
-          <div className="score">{result.score}%</div>
+          <div className="score">
+            {typeof result.max_marks === "number" && result.max_marks > 0
+              ? `${result.marks_obtained} / ${result.max_marks}`
+              : `${result.score}%`}
+          </div>
           <div className="muted">
             You got {result.correct} / {result.total} correct
+            {typeof result.max_marks === "number" && result.max_marks > 0
+              ? ` · ${result.score}% (MCQ −1/3; MSQ/NAT no negative marking)` : ""}
           </div>
         </div>
       )}
@@ -373,6 +469,13 @@ export default function TestPage() {
             </div>
             <div style={{ marginBottom: 8 }}>
               <span className="chip">{secName}</span>
+              <span className="chip">{q.qtype}</span>
+              <span className="chip">{q.marks} mark{q.marks === 1 ? "" : "s"}</span>
+              {result && resItem && (
+                <span className="chip" style={resItem.marks < 0 ? { background: "#f8d7da", color: "#842029" } : undefined}>
+                  {resItem.marks > 0 ? `+${resItem.marks}` : `${resItem.marks}`} / {resItem.max_marks}
+                </span>
+              )}
               {q.verified && (
                 <span className="badge">
                   ✓ Verified{typeof q.year === "number" ? ` · GATE ${q.year}` : ""}
@@ -382,24 +485,63 @@ export default function TestPage() {
               {q.difficulty && <span className={`chip diff-${q.difficulty}`}>{q.difficulty}</span>}
               {marked[q.id] && !result && <span className="chip" style={{ background: "#b8860b", color: "#fff" }}>review</span>}
             </div>
+            {q.qtype === "NAT" ? (
+              <div className="options">
+                <label className="muted" style={{ fontSize: 13 }}>
+                  Numerical answer:
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    disabled={!!result}
+                    value={typeof answers[q.id] === "string" ? (answers[q.id] as string) : ""}
+                    onChange={(e) => answerNAT(q.id, e.target.value)}
+                    placeholder="Enter a number"
+                    style={{ marginLeft: 8, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border, #ccc)" }}
+                  />
+                </label>
+                {result && resItem && (
+                  <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+                    Correct: {resItem.correct_value}
+                    {(resItem.correct_tol ?? 0) > 0 ? ` ± ${resItem.correct_tol}` : ""}
+                    {typeof answers[q.id] === "string" && answers[q.id] !== "" ? ` · You answered: ${answers[q.id]}` : " · Skipped"}
+                  </div>
+                )}
+              </div>
+            ) : (
             <div className="options">
               {q.options.map((opt, oi) => {
                 let cls = "option";
                 const correctIdx = resItem?.correct_option
                   ? resItem.correct_option.charCodeAt(0) - 65
                   : -1;
+                const correctSet = new Set(
+                  (resItem?.correct_options || []).map((t) => q.options.indexOf(t)).filter((i) => i >= 0)
+                );
+                const pickedSet = new Set(Array.isArray(answers[q.id]) ? (answers[q.id] as number[]) : []);
                 if (result && resItem) {
-                  if (oi === correctIdx) cls += " correct";
-                  else if (answers[q.id] === oi && !resItem.is_correct) cls += " wrong";
+                  if (q.qtype === "MSQ") {
+                    if (correctSet.has(oi)) cls += " correct";
+                    else if (pickedSet.has(oi) && !resItem.is_correct) cls += " wrong";
+                  } else {
+                    if (oi === correctIdx) cls += " correct";
+                    else if (answers[q.id] === oi && !resItem.is_correct) cls += " wrong";
+                  }
+                } else if (q.qtype === "MSQ") {
+                  if (pickedSet.has(oi)) cls += " selected";
                 } else if (answers[q.id] === oi) cls += " selected";
                 return (
-                  <div key={oi} className={cls} onClick={() => choose(q.id, oi)}>
-                    <span>{String.fromCharCode(65 + oi)}.</span>
+                  <div
+                    key={oi}
+                    className={cls}
+                    onClick={() => (q.qtype === "MSQ" ? toggleMSQ(q.id, oi) : choose(q.id, oi))}
+                  >
+                    <span>{q.qtype === "MSQ" ? (pickedSet.has(oi) ? "☑" : "☐") : `${String.fromCharCode(65 + oi)}.`}</span>
                     <span>{opt}</span>
                   </div>
                 );
               })}
             </div>
+            )}
             {result && resItem && (
               <div className="expbox">
                 <strong>Explanation:</strong>{" "}

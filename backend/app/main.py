@@ -34,6 +34,11 @@ def _run_migrations() -> None:
         },
         "questions": {
             "updated_at": "TIMESTAMP",
+            "marks": "INTEGER NOT NULL DEFAULT 1",
+            "qtype": "VARCHAR(8) NOT NULL DEFAULT 'MCQ'",
+            "answer_list": "JSON",
+            "answer_num": "FLOAT",
+            "answer_tol": "FLOAT",
         },
     }
     inspector = sa_inspect(engine)

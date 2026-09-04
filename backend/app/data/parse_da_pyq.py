@@ -143,6 +143,16 @@ SECTION_OVERRIDES = {
     (2025, 13): "da_linalg",      # row-stochastic matrix; symbol-heavy stem
     (2025, 22): "da_ml",          # perceptron update; beats generic code words
     (2025, 44): "da_ai_dl",       # A* state graph; beats graph/queue words
+    (2026, 24): "da_ai_dl",       # entailment logic
+    (2026, 33): "da_prob_stats",  # counting involutions
+    (2026, 35): "da_calc_opt",    # double series sum
+    (2026, 62): "da_prob_stats",  # sample variance identity
+    (2025, 32): "da_calc_opt",    # limit
+    (2025, 59): "da_calc_opt",    # functional inequality
+    (2024, 34): "da_prob_stats",  # updated sample average
+    (2024, 48): "da_linalg",      # linear systems MSQ
+    (2024, 60): "da_calc_opt",    # limit
+    (2024, 62): "da_ml",          # decision-tree information gain
 }
 
 # Per-question repairs, each verified against the official paper. Applied to
@@ -261,16 +271,118 @@ def split_options(block: str):
     return stem, [re.sub(r"\s+", " ", o).strip() for o in opts]
 
 
+def get_all_key_rows(txt: str) -> dict[int, tuple[str, str, str, int]]:
+    """Map question number -> (type, section, raw key, marks) for all types."""
+    out: dict[int, tuple[str, str, int]] = {}
+    for m in re.finditer(
+        r"(\d+)\s+(?:\d+\s+)?(MCQ|NAT|MSQ)\s+(GA|DA)\s+(\S+(?:\s+to\s+\S+)?)\s+(\d+)",
+        txt, re.I,
+    ):
+        qnum, typ, sec, key, marks = (
+            int(m.group(1)), m.group(2).upper(), m.group(3).upper(),
+            m.group(4), int(m.group(5)),
+        )
+        if 1 <= qnum <= 65 and qnum not in out:
+            out[qnum] = (typ, sec, key, marks)
+    return out
+
+
 def get_mcq_keys(txt: str) -> dict[int, tuple[str, str, int]]:
     """Map question number -> (section 'GA'/'DA', answer letter, marks)."""
     out: dict[int, tuple[str, str, int]] = {}
-    for m in re.finditer(
-        r"(\d+)\s+(?:\d+\s+)?MCQ\s+(GA|DA)\s+([A-D])\s+(\d+)", txt, re.I
-    ):
-        qnum, sec, letter, marks = int(m.group(1)), m.group(2).upper(), m.group(3).upper(), int(m.group(4))
-        if 1 <= qnum <= 65 and qnum not in out:
-            out[qnum] = (sec, letter, marks)
+    for qnum, (typ, sec, key, marks) in get_all_key_rows(txt).items():
+        if typ == "MCQ" and len(key) == 1 and key in LETTER_IDX:
+            out[qnum] = (sec, key, marks)
     return out
+
+
+def _section_for(year: int, qnum: int, sec: str, text: str, unmapped: list) -> str | None:
+    if sec == "GA":
+        return "da_aptitude"
+    if (year, qnum) in SECTION_OVERRIDES:
+        return SECTION_OVERRIDES[(year, qnum)]
+    section = guess_section(text)
+    if section is None:
+        unmapped.append(qnum)
+    return section
+
+
+def _explain(year: int, qnum: int, marks: int, key_desc: str) -> str:
+    return (
+        f"GATE DA {year} · Q.{qnum} · {marks} mark{'s' if marks != 1 else ''}. "
+        f"Official key: {key_desc}."
+    )
+
+
+def parse_msq_nat(qp_path: str, keys_path: str, year: int):
+    """Extract MSQ (options + correct letters) and NAT (stem + range) entries."""
+    body = get_body_blocks(extract_text(qp_path))
+    keys = get_all_key_rows(extract_text(keys_path))
+    msq, nat, skipped_fig, unmapped = [], [], [], []
+    for qnum in sorted(keys):
+        typ, sec, key, marks = keys[qnum]
+        if (year, qnum) in EXCLUDE:
+            continue
+        block = body.get(qnum, "")
+        if not block:
+            continue
+        if typ == "MSQ":
+            letters = [k.strip().upper() for k in key.split(";")]
+            if not letters or any(l not in LETTER_IDX for l in letters):
+                continue
+            parsed = split_options(block)
+            if parsed is None:
+                continue
+            stem, opts = parsed
+            if has_visual(stem + " " + " ".join(opts)):
+                skipped_fig.append(qnum)
+                continue
+            section = _section_for(year, qnum, sec, stem + " " + " ".join(opts), unmapped)
+            if section is None:
+                continue
+            msq.append({
+                "id": f"da_pyq_{year}_{qnum:02d}",
+                "section": section,
+                "text": stem,
+                "options": opts,
+                "answer": sorted(LETTER_IDX[l] for l in letters),
+                "qtype": "MSQ",
+                "marks": marks,
+                "explanation": _explain(year, qnum, marks, "(" + ",".join(letters) + ")"),
+                "source": f"GATE DA {year} (official paper + key)",
+                "verified": True,
+                "year": year,
+                "qnum": qnum,
+            })
+        elif typ == "NAT":
+            m = re.match(r"\s*([0-9.]+)\s+to\s+([0-9.]+)\s*$", key)
+            if not m:
+                continue
+            try:
+                lo, hi = float(m.group(1)), float(m.group(2))
+            except ValueError:
+                continue
+            if len(block.strip()) < 30 or has_visual(block):
+                skipped_fig.append(qnum)
+                continue
+            section = _section_for(year, qnum, sec, block, unmapped)
+            if section is None:
+                continue
+            nat.append({
+                "id": f"da_pyq_{year}_{qnum:02d}",
+                "section": section,
+                "text": block.strip(),
+                "answer_num": (lo + hi) / 2,
+                "answer_tol": (hi - lo) / 2,
+                "qtype": "NAT",
+                "marks": marks,
+                "explanation": _explain(year, qnum, marks, f"{lo} to {hi}"),
+                "source": f"GATE DA {year} (official paper + key)",
+                "verified": True,
+                "year": year,
+                "qnum": qnum,
+            })
+    return msq, nat, skipped_fig, unmapped
 
 
 def has_visual(block: str) -> bool:
@@ -322,6 +434,7 @@ def parse_paper(qp_path: str, keys_path: str, year: int):
             "text": stem,
             "options": opts,
             "answer": LETTER_IDX[letter],
+            "marks": marks,
             "explanation": (
                 f"GATE DA {year} · Q.{qnum} · {marks} mark{'s' if marks != 1 else ''}. "
                 f"Official key: ({letter})."
