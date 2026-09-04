@@ -19215,18 +19215,28 @@ def _strip_nul(value):
 
 
 def seed_questions(db) -> int:
-    """Populate the questions table from this seed file (no-op if non-empty)."""
+    """Insert seed-file questions missing from the table (idempotent top-up).
+
+    Previously a no-op whenever the table was non-empty, which stranded all
+    later bank expansions on deployed DBs. Now inserts only (paper, qid)
+    pairs not already present; never deletes or modifies existing rows.
+    """
     from app.db import models
 
-    if db.query(models.Question).count() > 0:
-        return 0
+    existing = {
+        (r.paper, r.qid)
+        for r in db.query(models.Question.paper, models.Question.qid).all()
+    }
     created = 0
     for paper, qs in QUESTIONS.items():
         for q in qs:
+            qid = _strip_nul(q.get("id") or q.get("qid"))
+            if (paper, qid) in existing:
+                continue
             db.add(
                 models.Question(
                     paper=paper,
-                    qid=_strip_nul(q.get("id") or q.get("qid")),
+                    qid=qid,
                     section=_strip_nul(q.get("section", "")),
                     text=_strip_nul(q.get("text", "")),
                     options=_strip_nul(q.get("options", [])),
@@ -19237,6 +19247,7 @@ def seed_questions(db) -> int:
                     verified=bool(q.get("verified", False)),
                 )
             )
+            existing.add((paper, qid))
             created += 1
     db.commit()
     return created
