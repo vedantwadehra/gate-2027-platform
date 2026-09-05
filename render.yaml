@@ -37,7 +37,7 @@ services:
       - key: ADMIN_KEY
         generateValue: true
       - key: CORS_ORIGINS
-        value: https://gate2027-frontend.onrender.com
+        value: https://gate2027-frontend.onrender.com,https://gate-2027-frontend.vercel.app
       - key: FRONTEND_URL
         value: https://gate2027-frontend.onrender.com
       # Social login (optional): create one OAuth app per provider with
