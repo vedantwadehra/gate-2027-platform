@@ -1,6 +1,6 @@
 'use client';
 
-import { useEffect, useRef, useState } from "react";
+import { memo, useCallback, useEffect, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import { getToken } from "../../lib/auth";
 
@@ -83,7 +83,6 @@ export default function TestPage() {
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [result, setResult] = useState<SubmitResponse | null>(null);
-  const [secondsLeft, setSecondsLeft] = useState(0);
   const [bookmarked, setBookmarked] = useState<Record<string, boolean>>({});
   const [marked, setMarked] = useState<Record<string, boolean>>({});
   const [verifiedOnly, setVerifiedOnly] = useState(false);
@@ -103,10 +102,13 @@ export default function TestPage() {
   const [paused, setPaused] = useState(false);
   const [showCalc, setShowCalc] = useState(false);
   const [activeQ, setActiveQ] = useState(0);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const reqRef = useRef(0);
   const [explanations, setExplanations] = useState<Record<string, string>>({});
   const [loadingExp, setLoadingExp] = useState<Record<string, boolean>>({});
   const submittedRef = useRef(false);
   const qRefs = useRef<(HTMLDivElement | null)[]>([]);
+  const submitRef = useRef<() => void>(() => {});
 
   useEffect(() => {
     const sp = new URLSearchParams(window.location.search);
@@ -163,6 +165,9 @@ export default function TestPage() {
 
   useEffect(() => {
     if (!view || (view !== "test" && !practiceBookmarks)) return;
+    const myReq = ++reqRef.current;
+    setLoading(true);
+    setLoadError(null);
     const paramsQ = new URLSearchParams();
     let loadUrl: string;
     if (practiceBookmarks) {
@@ -183,16 +188,27 @@ export default function TestPage() {
       loadUrl = `/api/test/${paper}${qs ? `?${qs}` : ""}`;
     }
     fetch(loadUrl)
-      .then((r) => r.json())
+      .then(async (r) => {
+        if (!r.ok) {
+          const j = await r.json().catch(() => null);
+          throw new Error((j && j.detail) || `Load failed (${r.status})`);
+        }
+        return r.json();
+      })
       .then((d) => {
+        if (reqRef.current !== myReq) return; // stale response from an earlier pick
         setData(d);
         setAnswers({});
         setMarked({});
         setActiveQ(0);
         setResult(null);
         submittedRef.current = false;
-        setSecondsLeft(d.duration_minutes * 60);
         setPaused(false);
+        setLoading(false);
+      })
+      .catch((e: unknown) => {
+        if (reqRef.current !== myReq) return;
+        setLoadError(e instanceof Error ? e.message : "Could not load test.");
         setLoading(false);
       });
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -242,42 +258,35 @@ export default function TestPage() {
       .catch(() => {});
   }, [paper]);
 
-  useEffect(() => {
-    if (paused || secondsLeft <= 0 || result) return;
-    const t = setInterval(() => {
-      setSecondsLeft((s) => {
-        if (s <= 1) {
-          clearInterval(t);
-          if (!submittedRef.current) doSubmit();
-          return 0;
-        }
-        return s - 1;
+  const choose = useCallback(
+    (qid: string, optIdx: number) => {
+      if (result) return;
+      setAnswers((prev) => ({ ...prev, [qid]: optIdx }));
+    },
+    [result]
+  );
+
+  const toggleMSQ = useCallback(
+    (qid: string, optIdx: number) => {
+      if (result) return;
+      setAnswers((prev) => {
+        const cur = prev[qid];
+        const set = new Set(Array.isArray(cur) ? cur : []);
+        if (set.has(optIdx)) set.delete(optIdx);
+        else set.add(optIdx);
+        return { ...prev, [qid]: [...set].sort((a, b) => a - b) };
       });
-    }, 1000);
-    return () => clearInterval(t);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [paused, secondsLeft, result]);
+    },
+    [result]
+  );
 
-  function choose(qid: string, optIdx: number) {
-    if (result) return;
-    setAnswers((prev) => ({ ...prev, [qid]: optIdx }));
-  }
-
-  function toggleMSQ(qid: string, optIdx: number) {
-    if (result) return;
-    setAnswers((prev) => {
-      const cur = prev[qid];
-      const set = new Set(Array.isArray(cur) ? cur : []);
-      if (set.has(optIdx)) set.delete(optIdx);
-      else set.add(optIdx);
-      return { ...prev, [qid]: [...set].sort((a, b) => a - b) };
-    });
-  }
-
-  function answerNAT(qid: string, value: string) {
-    if (result) return;
-    setAnswers((prev) => ({ ...prev, [qid]: value }));
-  }
+  const answerNAT = useCallback(
+    (qid: string, value: string) => {
+      if (result) return;
+      setAnswers((prev) => ({ ...prev, [qid]: value }));
+    },
+    [result]
+  );
 
   function isAnswered(q: Question): boolean {
     const a = answers[q.id];
@@ -287,34 +296,36 @@ export default function TestPage() {
     return true;
   }
 
-  function toggleMark(qid: string) {
+  const toggleMark = useCallback((qid: string) => {
     setMarked((prev) => ({ ...prev, [qid]: !prev[qid] }));
-  }
+  }, []);
 
   function gotoQ(i: number) {
     setActiveQ(i);
     qRefs.current[i]?.scrollIntoView({ behavior: "smooth", block: "start" });
   }
 
-  async function toggleBookmark(qid: string) {
-    const token = getToken();
-    if (!token) {
-      alert("Login to bookmark questions.");
-      return;
-    }
-    const currently = !!bookmarked[qid];
-    const res = await fetch("/api/bookmark", {
-      method: "POST",
-      headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
-      body: JSON.stringify({ paper, qid }),
-    });
-    if (res.ok) {
-      const r = await res.json();
-      setBookmarked((prev) => ({ ...prev, [qid]: r.bookmarked }));
-    } else if (res.status === 401) {
-      alert("Login to bookmark questions.");
-    }
-  }
+  const toggleBookmark = useCallback(
+    async (qid: string) => {
+      const token = getToken();
+      if (!token) {
+        alert("Login to bookmark questions.");
+        return;
+      }
+      const res = await fetch("/api/bookmark", {
+        method: "POST",
+        headers: { "Content-Type": "application/json", Authorization: `Bearer ${token}` },
+        body: JSON.stringify({ paper, qid }),
+      });
+      if (res.ok) {
+        const r = await res.json();
+        setBookmarked((prev) => ({ ...prev, [qid]: r.bookmarked }));
+      } else if (res.status === 401) {
+        alert("Login to bookmark questions.");
+      }
+    },
+    [paper]
+  );
 
   async function doSubmit() {
     if (submittedRef.current || !data) return;
@@ -323,15 +334,24 @@ export default function TestPage() {
     const headers: Record<string, string> = { "Content-Type": "application/json" };
     const token = getToken();
     if (token) headers["Authorization"] = `Bearer ${token}`;
-    const res = await fetch("/api/test/submit", {
-      method: "POST",
-      headers,
-      body: JSON.stringify({ paper, answers, qids: data.questions.map((q) => q.id) }),
-    });
-    const r = await res.json();
-    setResult(r);
-    setAttemptId(r.attempt_id ?? null);
-    setSubmitting(false);
+    try {
+      const res = await fetch("/api/test/submit", {
+        method: "POST",
+        headers,
+        body: JSON.stringify({ paper, answers, qids: data.questions.map((q) => q.id) }),
+      });
+      const r = await res.json().catch(() => null);
+      if (!res.ok || !r || !Array.isArray(r.results)) {
+        throw new Error((r && r.detail) || `Scoring failed (${res.status})`);
+      }
+      setResult(r);
+      setAttemptId(r.attempt_id ?? null);
+    } catch (e: unknown) {
+      submittedRef.current = false; // allow retry
+      alert(e instanceof Error ? e.message : "Scoring failed. Please retry.");
+    } finally {
+      setSubmitting(false);
+    }
   }
 
   async function downloadPdf() {
@@ -353,16 +373,19 @@ export default function TestPage() {
     URL.revokeObjectURL(url);
   }
 
-  async function genExplanation(qid: string) {
-    setLoadingExp((p) => ({ ...p, [qid]: true }));
-    try {
-      const r = await fetch(`/api/explain/${paper}/${qid}`);
-      const j = await r.json();
-      setExplanations((p) => ({ ...p, [qid]: j.explanation }));
-    } finally {
-      setLoadingExp((p) => ({ ...p, [qid]: false }));
-    }
-  }
+  const genExplanation = useCallback(
+    async (qid: string) => {
+      setLoadingExp((p) => ({ ...p, [qid]: true }));
+      try {
+        const r = await fetch(`/api/explain/${paper}/${qid}`);
+        const j = await r.json();
+        setExplanations((p) => ({ ...p, [qid]: j.explanation }));
+      } finally {
+        setLoadingExp((p) => ({ ...p, [qid]: false }));
+      }
+    },
+    [paper]
+  );
 
   if (loading || !data) {
     if (view === "choose" && !practiceBookmarks) {
@@ -423,9 +446,19 @@ export default function TestPage() {
     return <p className="muted">Loading test…</p>;
   }
 
-  const mm = String(Math.floor(secondsLeft / 60)).padStart(2, "0");
-  const ss = String(secondsLeft % 60).padStart(2, "0");
+  if (loadError) {
+    return (
+      <div>
+        <p className="muted">Couldn&apos;t load this test: {loadError}</p>
+        <button className="btn secondary" onClick={backToChooser}>
+          ← All {paper} tests
+        </button>
+      </div>
+    );
+  }
+
   const unanswered = data.questions.filter((q) => !isAnswered(q)).length;
+  submitRef.current = doSubmit;
 
   const numberedSet = (fullMock && paperSet) || (!fullMock && topic !== "all" && topicSet);
 
@@ -489,9 +522,12 @@ export default function TestPage() {
       {/* Sticky control bar */}
       {!result && (
         <div className="testbar">
-          <span className="timer" style={{ color: secondsLeft < 60 ? "var(--danger)" : "var(--accent-2)" }}>
-            {mm}:{ss}
-          </span>
+          <TestTimer
+            total={data.duration_minutes * 60}
+            paused={paused}
+            stopped={!!result}
+            onExpireRef={submitRef}
+          />
           <button className="btn secondary" onClick={() => setPaused((p) => !p)}>
             {paused ? "Resume" : "Pause"}
           </button>
@@ -537,127 +573,29 @@ export default function TestPage() {
         </div>
       )}
 
-      {data.questions.map((q, qi) => {
-        const resItem = result?.results.find((r) => r.id === q.id);
-        const secName = data.section_names[q.section] || q.section;
-        return (
-          <div className="question" key={q.id} ref={(el) => { qRefs.current[qi] = el; }}>
-            <div className="qhead">
-              <div className="qtext">
-                {qi + 1}. {q.text}
-              </div>
-              <div style={{ display: "flex", gap: 6 }}>
-                {!result && (
-                  <button
-                    className={`star ${marked[q.id] ? "on" : ""}`}
-                    title="Mark for review"
-                    onClick={() => toggleMark(q.id)}
-                  >
-                    {marked[q.id] ? "✦" : "✧"}
-                  </button>
-                )}
-                <button
-                  className={`star ${bookmarked[q.id] ? "on" : ""}`}
-                  title={practiceBookmarks ? "Already bookmarked" : (bookmarked[q.id] ? "Remove bookmark" : "Bookmark / flag")}
-                  onClick={() => toggleBookmark(q.id)}
-                  disabled={!!result || practiceBookmarks}
-                >
-                  {bookmarked[q.id] ? "★" : "☆"}
-                </button>
-              </div>
-            </div>
-            <div style={{ marginBottom: 8 }}>
-              <span className="chip">{secName}</span>
-              <span className="chip">{q.qtype}</span>
-              <span className="chip">{q.marks} mark{q.marks === 1 ? "" : "s"}</span>
-              {result && resItem && (
-                <span className="chip" style={resItem.marks < 0 ? { background: "#f8d7da", color: "#842029" } : undefined}>
-                  {resItem.marks > 0 ? `+${resItem.marks}` : `${resItem.marks}`} / {resItem.max_marks}
-                </span>
-              )}
-              {q.verified && (
-                <span className="badge">
-                  ✓ Verified{typeof q.year === "number" ? ` · GATE ${q.year}` : ""}
-                  {q.source ? ` · ${q.source}` : ""}
-                </span>
-              )}
-              {q.difficulty && <span className={`chip diff-${q.difficulty}`}>{q.difficulty}</span>}
-              {marked[q.id] && !result && <span className="chip" style={{ background: "#b8860b", color: "#fff" }}>review</span>}
-            </div>
-            {q.qtype === "NAT" ? (
-              <div className="options">
-                <label className="muted" style={{ fontSize: 13 }}>
-                  Numerical answer:
-                  <input
-                    type="text"
-                    inputMode="decimal"
-                    disabled={!!result}
-                    value={typeof answers[q.id] === "string" ? (answers[q.id] as string) : ""}
-                    onChange={(e) => answerNAT(q.id, e.target.value)}
-                    placeholder="Enter a number"
-                    style={{ marginLeft: 8, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border, #ccc)" }}
-                  />
-                </label>
-                {result && resItem && (
-                  <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
-                    Correct: {resItem.correct_value}
-                    {(resItem.correct_tol ?? 0) > 0 ? ` ± ${resItem.correct_tol}` : ""}
-                    {typeof answers[q.id] === "string" && answers[q.id] !== "" ? ` · You answered: ${answers[q.id]}` : " · Skipped"}
-                  </div>
-                )}
-              </div>
-            ) : (
-            <div className="options">
-              {q.options.map((opt, oi) => {
-                let cls = "option";
-                const correctIdx = resItem?.correct_option
-                  ? resItem.correct_option.charCodeAt(0) - 65
-                  : -1;
-                const correctSet = new Set(
-                  (resItem?.correct_options || []).map((t) => q.options.indexOf(t)).filter((i) => i >= 0)
-                );
-                const pickedSet = new Set(Array.isArray(answers[q.id]) ? (answers[q.id] as number[]) : []);
-                if (result && resItem) {
-                  if (q.qtype === "MSQ") {
-                    if (correctSet.has(oi)) cls += " correct";
-                    else if (pickedSet.has(oi) && !resItem.is_correct) cls += " wrong";
-                  } else {
-                    if (oi === correctIdx) cls += " correct";
-                    else if (answers[q.id] === oi && !resItem.is_correct) cls += " wrong";
-                  }
-                } else if (q.qtype === "MSQ") {
-                  if (pickedSet.has(oi)) cls += " selected";
-                } else if (answers[q.id] === oi) cls += " selected";
-                return (
-                  <div
-                    key={oi}
-                    className={cls}
-                    onClick={() => (q.qtype === "MSQ" ? toggleMSQ(q.id, oi) : choose(q.id, oi))}
-                  >
-                    <span>{q.qtype === "MSQ" ? (pickedSet.has(oi) ? "☑" : "☐") : `${String.fromCharCode(65 + oi)}.`}</span>
-                    <span>{opt}</span>
-                  </div>
-                );
-              })}
-            </div>
-            )}
-            {result && resItem && (
-              <div className="expbox">
-                <strong>Explanation:</strong>{" "}
-                {resItem.explanation ? (
-                  resItem.explanation
-                ) : explanations[q.id] ? (
-                  explanations[q.id]
-                ) : (
-                  <button className="btn secondary" disabled={loadingExp[q.id]} onClick={() => genExplanation(q.id)}>
-                    {loadingExp[q.id] ? "Generating…" : "Generate with AI Tutor"}
-                  </button>
-                )}
-              </div>
-            )}
-          </div>
-        );
-      })}
+      {data.questions.map((q, qi) => (
+        <QuestionCard
+          key={q.id}
+          q={q}
+          qi={qi}
+          qrefs={qRefs}
+          answer={answers[q.id]}
+          isMarked={!!marked[q.id]}
+          isBookmarked={!!bookmarked[q.id]}
+          submitted={!!result}
+          resItem={result?.results.find((r) => r.id === q.id)}
+          secName={data.section_names[q.section] || q.section}
+          explanation={explanations[q.id]}
+          expLoading={!!loadingExp[q.id]}
+          practiceBookmarks={practiceBookmarks}
+          onChoose={choose}
+          onToggleMSQ={toggleMSQ}
+          onAnswerNAT={answerNAT}
+          onToggleMark={toggleMark}
+          onToggleBookmark={toggleBookmark}
+          onGenExp={genExplanation}
+        />
+      ))}
 
       {!result && (
         <button className="btn" onClick={doSubmit} disabled={submitting || Object.keys(answers).length === 0}>
@@ -722,6 +660,186 @@ export default function TestPage() {
         }
       `}</style>
     </div>
+  );
+}
+
+type QuestionCardProps = {
+  q: Question;
+  qi: number;
+  qrefs: React.MutableRefObject<(HTMLDivElement | null)[]>;
+  answer: number | number[] | string | undefined;
+  isMarked: boolean;
+  isBookmarked: boolean;
+  submitted: boolean;
+  resItem?: ResultItem;
+  secName: string;
+  explanation?: string;
+  expLoading: boolean;
+  practiceBookmarks: boolean;
+  onChoose: (qid: string, oi: number) => void;
+  onToggleMSQ: (qid: string, oi: number) => void;
+  onAnswerNAT: (qid: string, v: string) => void;
+  onToggleMark: (qid: string) => void;
+  onToggleBookmark: (qid: string) => void;
+  onGenExp: (qid: string) => void;
+};
+
+// Memoized so typing/ticking/palette interactions re-render only the
+// affected card instead of the whole 120-question list.
+const QuestionCard = memo(function QuestionCard(props: QuestionCardProps) {
+  const {
+    q, qi, qrefs, answer, isMarked, isBookmarked, submitted, resItem,
+    secName, explanation, expLoading, practiceBookmarks,
+    onChoose, onToggleMSQ, onAnswerNAT, onToggleMark, onToggleBookmark, onGenExp,
+  } = props;
+  return (
+    <div className="question" ref={(el) => { qrefs.current[qi] = el; }}>
+      <div className="qhead">
+        <div className="qtext">
+          {qi + 1}. {q.text}
+        </div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {!submitted && (
+            <button
+              className={`star ${isMarked ? "on" : ""}`}
+              title="Mark for review"
+              onClick={() => onToggleMark(q.id)}
+            >
+              {isMarked ? "✦" : "✧"}
+            </button>
+          )}
+          <button
+            className={`star ${isBookmarked ? "on" : ""}`}
+            title={practiceBookmarks ? "Already bookmarked" : (isBookmarked ? "Remove bookmark" : "Bookmark / flag")}
+            onClick={() => onToggleBookmark(q.id)}
+            disabled={submitted || practiceBookmarks}
+          >
+            {isBookmarked ? "★" : "☆"}
+          </button>
+        </div>
+      </div>
+      <div style={{ marginBottom: 8 }}>
+        <span className="chip">{secName}</span>
+        <span className="chip">{q.qtype}</span>
+        <span className="chip">{q.marks} mark{q.marks === 1 ? "" : "s"}</span>
+        {submitted && resItem && (
+          <span className="chip" style={resItem.marks < 0 ? { background: "#f8d7da", color: "#842029" } : undefined}>
+            {resItem.marks > 0 ? `+${resItem.marks}` : `${resItem.marks}`} / {resItem.max_marks}
+          </span>
+        )}
+        {q.verified && (
+          <span className="badge">
+            ✓ Verified{typeof q.year === "number" ? ` · GATE ${q.year}` : ""}
+            {q.source ? ` · ${q.source}` : ""}
+          </span>
+        )}
+        {q.difficulty && <span className={`chip diff-${q.difficulty}`}>{q.difficulty}</span>}
+        {isMarked && !submitted && <span className="chip" style={{ background: "#b8860b", color: "#fff" }}>review</span>}
+      </div>
+      {q.qtype === "NAT" ? (
+        <div className="options">
+          <label className="muted" style={{ fontSize: 13 }}>
+            Numerical answer:
+            <input
+              type="text"
+              inputMode="decimal"
+              disabled={submitted}
+              value={typeof answer === "string" ? answer : ""}
+              onChange={(e) => onAnswerNAT(q.id, e.target.value)}
+              placeholder="Enter a number"
+              style={{ marginLeft: 8, padding: "6px 10px", borderRadius: 8, border: "1px solid var(--border, #ccc)" }}
+            />
+          </label>
+          {submitted && resItem && (
+            <div className="muted" style={{ fontSize: 13, marginTop: 6 }}>
+              Correct: {resItem.correct_value}
+              {(resItem.correct_tol ?? 0) > 0 ? ` ± ${resItem.correct_tol}` : ""}
+              {typeof answer === "string" && answer !== "" ? ` · You answered: ${answer}` : " · Skipped"}
+            </div>
+          )}
+        </div>
+      ) : (
+      <div className="options">
+        {q.options.map((opt, oi) => {
+          let cls = "option";
+          const correctIdx = resItem?.correct_option
+            ? resItem.correct_option.charCodeAt(0) - 65
+            : -1;
+          const correctSet = new Set(
+            (resItem?.correct_options || []).map((t) => q.options.indexOf(t)).filter((i) => i >= 0)
+          );
+          const pickedSet = new Set(Array.isArray(answer) ? answer : []);
+          if (submitted && resItem) {
+            if (q.qtype === "MSQ") {
+              if (correctSet.has(oi)) cls += " correct";
+              else if (pickedSet.has(oi) && !resItem.is_correct) cls += " wrong";
+            } else {
+              if (oi === correctIdx) cls += " correct";
+              else if (answer === oi && !resItem.is_correct) cls += " wrong";
+            }
+          } else if (q.qtype === "MSQ") {
+            if (pickedSet.has(oi)) cls += " selected";
+          } else if (answer === oi) cls += " selected";
+          return (
+            <div
+              key={oi}
+              className={cls}
+              onClick={() => (q.qtype === "MSQ" ? onToggleMSQ(q.id, oi) : onChoose(q.id, oi))}
+            >
+              <span>{q.qtype === "MSQ" ? (pickedSet.has(oi) ? "☑" : "☐") : `${String.fromCharCode(65 + oi)}.`}</span>
+              <span>{opt}</span>
+            </div>
+          );
+        })}
+      </div>
+      )}
+      {submitted && resItem && (
+        <div className="expbox">
+          <strong>Explanation:</strong>{" "}
+          {resItem.explanation ? (
+            resItem.explanation
+          ) : explanation ? (
+            explanation
+          ) : (
+            <button className="btn secondary" disabled={expLoading} onClick={() => onGenExp(q.id)}>
+              {expLoading ? "Generating…" : "Generate with AI Tutor"}
+            </button>
+          )}
+        </div>
+      )}
+    </div>
+  );
+});
+
+function TestTimer({ total, paused, stopped, onExpireRef }: {
+  total: number;
+  paused: boolean;
+  stopped: boolean;
+  onExpireRef: React.MutableRefObject<() => void>;
+}) {
+  // Owns the countdown so ticks don't re-render the whole question list.
+  const [left, setLeft] = useState(total);
+  const firedRef = useRef(false);
+  useEffect(() => {
+    setLeft(total);
+    firedRef.current = false;
+  }, [total]);
+  useEffect(() => {
+    if (paused || stopped || firedRef.current) return;
+    if (left <= 0) {
+      firedRef.current = true;
+      onExpireRef.current();
+      return;
+    }
+    const t = setTimeout(() => setLeft(left - 1), 1000);
+    return () => clearTimeout(t);
+  }, [paused, stopped, left, onExpireRef]);
+  const mm = String(Math.floor(left / 60)).padStart(2, "0");
+  const ss = String(left % 60).padStart(2, "0");
+  return (
+    <span className="timer" style={{ color: left < 60 ? "var(--danger)" : "var(--accent-2)" }}>
+      {mm}:{ss}
+    </span>
   );
 }
 

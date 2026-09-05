@@ -8,7 +8,15 @@ SYSTEM_TEMPLATE = (
     "Computer Science papers). Help the student by explaining concepts, solving "
     "doubts, and generating practice questions. Use the retrieved context when "
     "relevant, but keep answers clear and exam-focused. If asked to generate a "
-    "question, provide one with options and an explanation."
+    "question, provide one with options and an explanation. "
+    "Format every answer with clean Markdown: short headings, bullet or numbered "
+    "lists, tables where they help, and fenced code blocks for code. Write ALL "
+    "mathematics with $...$ inline and $$...$$ display delimiters. Never use "
+    "\\( \\), \\[ \\], or raw unicode math — dollar delimiters only, or the "
+    "math will not render. "
+    "For numerical problems, reason step by step, simplify carefully, and "
+    "double-check the final value against your derivation before stating it. "
+    "When the user asks for 'just the value/answer', reply with only that."
 )
 
 GEN_TEMPLATE = (
@@ -38,6 +46,22 @@ def build_gen_system(paper: str, context_chunks: list[str]) -> str:
     return f"{GEN_TEMPLATE}\n\nPaper: {paper}\n\nRetrieved context:\n{context}"
 
 
+def _needs_context(message: str) -> bool:
+    """Skip retrieval for chit-chat (greetings/thanks/ok): TF-IDF matches
+    random lookalikes on content-free text, and the noise hurts more than the
+    (absent) signal helps. Everything else — including short conceptual
+    queries like 'what is PCA' — still retrieves."""
+    import re
+
+    m = (message or "").strip().lower()
+    if not m:
+        return False
+    return not re.fullmatch(
+        r"(hi+|hii+|hello+|hey+|yo|thanks?|thank\s+you|thx|ok+|okay|bye+|good\s*(morning|afternoon|evening|day))[!.,\s]*",
+        m,
+    )
+
+
 async def answer_question(
     paper: str,
     message: str,
@@ -45,7 +69,7 @@ async def answer_question(
     image: bytes | None = None,
     image_media_type: str | None = None,
 ) -> str:
-    chunks = retrieval.retrieve(paper, message, k=4)
+    chunks = retrieval.retrieve(paper, message, k=4) if _needs_context(message) else []
     system = build_system(paper, chunks)
     from app.core.llm import generate
 
@@ -62,7 +86,7 @@ async def answer_question_stream(
     image: bytes | None = None,
     image_media_type: str | None = None,
 ):
-    chunks = retrieval.retrieve(paper, message, k=4)
+    chunks = retrieval.retrieve(paper, message, k=4) if _needs_context(message) else []
     system = build_system(paper, chunks, history)
     from app.core.llm import generate_stream
 

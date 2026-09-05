@@ -239,26 +239,49 @@ async def generate_stream(
 
     On any provider/network failure it transparently falls back to the mock
     tutor so the chat UI never shows a hard error.
+
+    Some providers return an image rejection as ordinary streamed content
+    instead of an HTTP error. That rejection always arrives as a short,
+    front-loaded message, so when an image is attached we gate on the first
+    ~300 chars before streaming live; text-only calls stream straight
+    through with zero buffering.
     """
     provider = settings.llm_provider.lower()
     if provider in ("openai", "groq") and settings.llm_api_key:
         base = "https://api.groq.com/openai/v1" if provider == "groq" else None
         mdl = model or (settings.groq_model if provider == "groq" else None)
-        buf: list[str] = []
         try:
-            async for tok in _stream_openai(
+            stream = _stream_openai(
                 system,
                 user,
                 base_url=base,
                 model=mdl,
                 image=image,
                 image_media_type=image_media_type,
-            ):
-                buf.append(tok)
-            # A provider may embed the rejection in ordinary streamed content.
-            if _looks_like_provider_error("".join(buf)):
+            )
+            if image is None:
+                async for tok in stream:
+                    yield tok
+                return
+            head: list[str] = []
+            head_len = 0
+            async for tok in stream:
+                head.append(tok)
+                head_len += len(tok)
+                if head_len >= 300:
+                    break
+            text = "".join(head)
+            if _looks_like_provider_error(text):
                 raise RuntimeError("provider returned an error response")
-            for tok in buf:
+            for tok in head:
+                yield tok
+            # Remainder streams live; keep watching in case a rejection
+            # appears past the head window, and abort to the fallback then.
+            tail = [text]
+            async for tok in stream:
+                tail.append(tok)
+                if _looks_like_provider_error("".join(tail)[-600:]):
+                    raise RuntimeError("provider returned an error response")
                 yield tok
             return
         except Exception:

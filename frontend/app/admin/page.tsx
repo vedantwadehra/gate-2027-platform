@@ -178,7 +178,7 @@ export default function AdminPage() {
 
   async function reset() {
     if (!confirm("Reset the entire question bank to the seed file? This deletes all edits.")) return;
-    const r = await fetch("/api/admin/reset", { method: "POST", headers: authHeaders() });
+    const r = await fetch("/api/admin/reset?confirm=true", { method: "POST", headers: authHeaders() });
     const d = await r.json().catch(() => ({}));
     setMsg(d.message || "Reset.");
     await load();

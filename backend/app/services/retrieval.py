@@ -42,23 +42,19 @@ def _build_chunks(paper: str) -> list[dict]:
     except Exception:
         qlist = qb.QUESTIONS.get(paper, [])
     for q in qlist:
-        qt = (q.get("qtype") or "MCQ").upper()
         opts = q.get("options") or []
-        if qt == "MSQ":
-            idxs = q.get("answer_list") or [q.get("answer", 0)]
-            ans = ", ".join(
-                opts[i] for i in idxs if isinstance(i, int) and 0 <= i < len(opts)
-            )
-        elif qt == "NAT":
-            ans = str(q.get("answer_num"))
-        else:
-            ai = q.get("answer", 0)
-            ans = opts[ai] if isinstance(ai, int) and 0 <= ai < len(opts) else ""
+        # NOTE: the official/institute answer is intentionally NOT embedded:
+        # PDF-extracted math often mangles fractions/superscripts, so a raw
+        # "Answer:" line can teach the model wrong-looking math. The stem +
+        # options carry the signal; the model reasons out the answer itself.
+        # Hand-written explanations (short prose, not key boilerplate) are kept.
+        expl = (q.get("explanation") or "").strip()
+        if len(expl) < 20 or expl.startswith(("Answer:", "Official key:")):
+            expl = ""
         body = (
             f"Practice question ({q['section']}): {q['text']}\n"
-            f"Options: {opts}\n"
-            f"Answer: {ans}\n"
-            f"Explanation: {q['explanation']}"
+            + "\n".join(f"{chr(65 + i)}. {o}" for i, o in enumerate(opts))
+            + (f"\nNote: {expl}" if expl else "")
         )
         chunks.append({"paper": paper, "section": q["section"], "text": body})
     return chunks
@@ -112,7 +108,7 @@ class _Index:
 
 _INDEXES: dict[str, _Index] = {}
 _INDEX_TIMES: dict[str, float] = {}
-_INDEX_TTL_SECONDS = 300  # rebuild at most every 5 min even without explicit invalidation
+_INDEX_TTL_SECONDS = 900  # rebuild at most every 15 min even without explicit invalidation
 
 
 def _get_index(paper: str) -> _Index:

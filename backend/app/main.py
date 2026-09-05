@@ -70,6 +70,22 @@ def _run_migrations() -> None:
                 conn.execute(
                     text("ALTER TABLE questions ALTER COLUMN source TYPE VARCHAR(256)")
                 )
+        # Hot-path indexes (create_all covers fresh DBs; this covers upgrades).
+        # CREATE INDEX IF NOT EXISTS is valid on both Postgres and SQLite.
+        # Skip tables that don't exist yet (fresh DB: create_all adds them below).
+        for table, stmt in (
+            ("test_attempts",
+             "CREATE INDEX IF NOT EXISTS ix_test_attempts_user_paper "
+             "ON test_attempts (user_id, paper)"),
+            ("test_attempts",
+             "CREATE INDEX IF NOT EXISTS ix_test_attempts_paper "
+             "ON test_attempts (paper)"),
+            ("generated_questions",
+             "CREATE INDEX IF NOT EXISTS ix_generated_questions_user "
+             "ON generated_questions (user_id)"),
+        ):
+            if table in present:
+                conn.execute(text(stmt))
         conn.commit()
 
 

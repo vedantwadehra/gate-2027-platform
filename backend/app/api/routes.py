@@ -535,7 +535,7 @@ async def chat_stream(
             .limit(12)
             .all()
         )
-        history = [{"role": m.role, "content": m.content} for m in msgs]
+        history = [{"role": m.role, "content": m.content[:2000]} for m in msgs]
 
     # Persist the user's message.
     if session_id:
@@ -628,6 +628,90 @@ def chat_history(
         q = q.filter(models.ChatMessage.user_id == int(user["sub"]))
     msgs = q.order_by(models.ChatMessage.created_at.asc()).limit(50).all()
     return [{"role": m.role, "content": m.content} for m in msgs]
+
+
+@api.get("/chat/sessions")
+def chat_sessions(
+    paper: str | None = None,
+    user: dict | None = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """List past chat sessions for the logged-in user (newest first).
+
+    Groups messages by (session_id, paper) with a preview taken from the
+    first user message. Anonymous callers get 401 and should track their own
+    session ids client-side instead.
+    """
+    from sqlalchemy import func as _func
+
+    if user is None:
+        raise HTTPException(401, "Not authenticated")
+    uid = int(user["sub"])
+    q = db.query(
+        models.ChatMessage.session_id,
+        models.ChatMessage.paper,
+        _func.max(models.ChatMessage.created_at).label("updated"),
+        _func.count(models.ChatMessage.id).label("messages"),
+    ).filter(models.ChatMessage.user_id == uid)
+    if paper:
+        q = q.filter(models.ChatMessage.paper == paper)
+    rows = (
+        q.group_by(models.ChatMessage.session_id, models.ChatMessage.paper)
+        .order_by(_func.max(models.ChatMessage.created_at).desc())
+        .limit(50)
+        .all()
+    )
+    previews: dict[tuple[str, str], str] = {}
+    if rows:
+        firsts = (
+            db.query(
+                models.ChatMessage.session_id,
+                models.ChatMessage.paper,
+                _func.min(models.ChatMessage.id).label("first_id"),
+            )
+            .filter(
+                models.ChatMessage.user_id == uid,
+                models.ChatMessage.role == "user",
+            )
+            .group_by(models.ChatMessage.session_id, models.ChatMessage.paper)
+            .subquery()
+        )
+        for sid, p, text in (
+            db.query(models.ChatMessage.session_id, models.ChatMessage.paper,
+                     models.ChatMessage.content)
+            .join(firsts,
+                  (models.ChatMessage.session_id == firsts.c.session_id)
+                  & (models.ChatMessage.paper == firsts.c.paper)
+                  & (models.ChatMessage.id == firsts.c.first_id))
+        ):
+            previews[(sid, p)] = (text or "")[:120]
+    return [
+        {
+            "session_id": sid,
+            "paper": p,
+            "preview": previews.get((sid, p), ""),
+            "messages": n,
+            "updated_at": upd.isoformat() if upd else None,
+        }
+        for sid, p, upd, n in rows
+    ]
+
+
+@api.delete("/chat/sessions/{session_id}")
+def delete_chat_session(
+    session_id: str,
+    user: dict | None = Depends(get_current_user),
+    db: Session = Depends(get_db),
+):
+    """Delete every message in a session. Logged-in users may only delete
+    their own sessions; anonymous callers may delete by exact id
+    (capability-style, same as reading)."""
+    q = db.query(models.ChatMessage).filter_by(session_id=session_id)
+    if user is not None:
+        q = q.filter(models.ChatMessage.user_id == int(user["sub"]))
+    n = q.delete(synchronize_session=False)
+    db.commit()
+    return {"deleted": n}
 
 
 @api.post("/generate")
@@ -1267,7 +1351,17 @@ def admin_seed(_: bool = Depends(require_admin), db: Session = Depends(get_db)):
 
 
 @api.post("/admin/reset")
-def admin_reset(_: bool = Depends(require_admin), db: Session = Depends(get_db)):
+def admin_reset(
+    _: bool = Depends(require_admin),
+    db: Session = Depends(get_db),
+    confirm: bool = False,
+):
+    if not confirm:
+        raise HTTPException(
+            400, "This wipes the whole bank (including admin-added questions). "
+            "Retry with ?confirm=true to proceed."
+        )
+    from app.data import questions as qb
     from app.data import questions as qb
 
     db.query(models.Question).delete()

@@ -1,8 +1,24 @@
 'use client';
 
 import { useEffect, useRef, useState } from "react";
+import Markdown from "../components/Markdown";
+import { getToken } from "../lib/auth";
 
 type Msg = { id: number; role: "user" | "bot"; text: string };
+type SessionItem = {
+  session_id: string;
+  paper: string;
+  preview: string;
+  messages?: number;
+  updated_at?: string | null;
+  local?: boolean;
+};
+type LocalSession = {
+  session_id: string;
+  paper: string;
+  preview: string;
+  updated_at: string;
+};
 type GenQ = {
   question: string;
   options: string[];
@@ -34,18 +50,122 @@ export default function ChatPage() {
 
   const logRef = useRef<HTMLDivElement>(null);
   const sessionRef = useRef<string>("");
+  const mountedRef = useRef(false);
+  const [sessions, setSessions] = useState<SessionItem[]>([]);
 
-  function getSession(): string {
-    let s = localStorage.getItem("gate_session");
-    if (!s) {
-      s = Math.random().toString(36).slice(2) + Date.now().toString(36);
-      localStorage.setItem("gate_session", s);
+  function newSessionId(): string {
+    return Math.random().toString(36).slice(2) + Date.now().toString(36);
+  }
+
+  function greeting(): Msg {
+    return {
+      id: msgId++,
+      role: "bot",
+      text: "Hi! I'm GATEMentor, your AI tutor for GATE 2027. Ask me about any DA or CS topic, request a practice question, or paste a doubt.",
+    };
+  }
+
+  function trackLocalSession(id: string, paperP: string, preview: string) {
+    try {
+      const raw = localStorage.getItem("gate_sessions");
+      const list: LocalSession[] = raw ? JSON.parse(raw) : [];
+      if (!list.some((s) => s.session_id === id)) {
+        list.unshift({
+          session_id: id,
+          paper: paperP,
+          preview: preview.slice(0, 120),
+          updated_at: new Date().toISOString(),
+        });
+        localStorage.setItem("gate_sessions", JSON.stringify(list.slice(0, 50)));
+      }
+    } catch {
+      /* storage unavailable */
     }
-    return s;
+  }
+
+  async function loadSessions() {
+    let server: SessionItem[] = [];
+    try {
+      const token = getToken();
+      if (token) {
+        const r = await fetch(`/api/chat/sessions?paper=${paper}`, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (r.ok) server = await r.json();
+      }
+    } catch {
+      /* offline */
+    }
+    let local: SessionItem[] = [];
+    try {
+      const raw = localStorage.getItem("gate_sessions");
+      const list: LocalSession[] = raw ? JSON.parse(raw) : [];
+      local = list
+        .filter((s) => s.paper === paper)
+        .map((s) => ({ ...s, messages: undefined, local: true }));
+    } catch {
+      /* ignore */
+    }
+    const seen = new Set(server.map((s) => s.session_id));
+    setSessions([...server, ...local.filter((s) => !seen.has(s.session_id))]);
+  }
+
+  function startNewChat() {
+    sessionRef.current = newSessionId();
+    setMessages([greeting()]);
+    setImgFile(null);
+  }
+
+  async function openSession(id: string) {
+    sessionRef.current = id;
+    try {
+      const r = await fetch(`/api/chat/history?paper=${paper}&session_id=${id}`);
+      const hist: { role: string; content: string }[] = r.ok ? await r.json() : [];
+      if (hist && hist.length) {
+        setMessages(
+          hist.map((h) => ({
+            id: msgId++,
+            role: (h.role === "assistant" ? "bot" : h.role) as "user" | "bot",
+            text: h.content,
+          }))
+        );
+      } else {
+        setMessages([greeting()]);
+      }
+    } catch {
+      setMessages([greeting()]);
+    }
+  }
+
+  async function deleteSession(id: string) {
+    try {
+      const token = getToken();
+      await fetch(`/api/chat/sessions/${id}`, {
+        method: "DELETE",
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      });
+      const raw = localStorage.getItem("gate_sessions");
+      const list: LocalSession[] = raw ? JSON.parse(raw) : [];
+      localStorage.setItem(
+        "gate_sessions",
+        JSON.stringify(list.filter((s) => s.session_id !== id))
+      );
+    } catch {
+      /* ignore */
+    }
+    if (sessionRef.current === id) startNewChat();
+    else loadSessions();
   }
 
   useEffect(() => {
-    sessionRef.current = getSession();
+    if (!mountedRef.current) {
+      // Fresh chat on every open; history lives in the panel below.
+      mountedRef.current = true;
+      sessionRef.current = newSessionId();
+      setMessages([greeting()]);
+      loadSessions();
+      return;
+    }
     fetch(`/api/chat/history?paper=${paper}&session_id=${sessionRef.current}`)
       .then((r) => (r.ok ? r.json() : []))
       .then((hist: { role: string; content: string }[]) => {
@@ -77,6 +197,7 @@ export default function ChatPage() {
   async function send() {
     const text = input.trim();
     if ((!text && !imgFile) || busy) return;
+    trackLocalSession(sessionRef.current, paper, text || "(image attached)");
     const userId = msgId++;
     const botId = msgId++;
     setMessages((m) => [
@@ -133,6 +254,7 @@ export default function ChatPage() {
     } finally {
       setBusy(false);
       setImgFile(null);
+      loadSessions();
     }
   }
 
@@ -297,11 +419,77 @@ export default function ChatPage() {
         )}
       </div>
 
+      <div
+        style={{
+          background: "var(--panel)",
+          border: "1px solid var(--border)",
+          borderRadius: 12,
+          padding: 16,
+          marginBottom: 18,
+        }}
+      >
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <strong>Chat history</strong>
+          <button className="btn secondary" onClick={startNewChat}>
+            + New chat
+          </button>
+        </div>
+        {sessions.length === 0 ? (
+          <p className="muted" style={{ fontSize: 13, marginBottom: 0 }}>
+            No past chats yet. Each visit starts fresh; previous chats appear here.
+          </p>
+        ) : (
+          <div style={{ display: "flex", flexDirection: "column", gap: 6, marginTop: 10 }}>
+            {sessions.map((s) => (
+              <div
+                key={s.session_id}
+                style={{ display: "flex", gap: 8, alignItems: "center" }}
+              >
+                <button
+                  className="btn secondary"
+                  style={{
+                    flex: 1,
+                    textAlign: "left",
+                    fontWeight: s.session_id === sessionRef.current ? 700 : 400,
+                  }}
+                  onClick={() => openSession(s.session_id)}
+                  title={s.preview}
+                >
+                  {(s.preview || "(image chat)").slice(0, 60)}
+                  <span className="muted" style={{ fontSize: 12 }}>
+                    {" "}
+                    · {s.messages !== undefined ? `${s.messages} msgs · ` : ""}
+                    {s.updated_at
+                      ? new Date(s.updated_at).toLocaleString()
+                      : "this device"}
+                  </span>
+                </button>
+                <button
+                  className="btn secondary"
+                  title="Delete this chat"
+                  onClick={() => deleteSession(s.session_id)}
+                >
+                  ×
+                </button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
       <div className="chat-box">
         <div className="chat-log" ref={logRef}>
           {messages.map((m) => (
             <div key={m.id} className={`msg ${m.role}`}>
-              {m.text || (busy && m.role === "bot" ? "…" : "")}
+              {m.role === "bot" ? (
+                m.text ? (
+                  <Markdown text={m.text} />
+                ) : (
+                  busy ? "…" : ""
+                )
+              ) : (
+                m.text
+              )}
             </div>
           ))}
         </div>

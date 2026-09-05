@@ -1,13 +1,16 @@
-from datetime import datetime, timezone
+from datetime import datetime
 
-from sqlalchemy import String, Integer, Float, DateTime, ForeignKey, JSON
+from sqlalchemy import String, Integer, Float, DateTime, ForeignKey, JSON, Index
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.session import Base
 
 
 def _now() -> datetime:
-    return datetime.now(timezone.utc)
+    # Naive UTC everywhere: columns are TIMESTAMP WITHOUT TIME ZONE, and
+    # psycopg2 already persisted aware values as naive UTC. Naive keeps SQL
+    # comparisons (flashcards due) independent of the session time zone.
+    return datetime.utcnow()
 
 
 class User(Base):
@@ -37,6 +40,11 @@ class TestAttempt(Base):
 
     user: Mapped["User | None"] = relationship(back_populates="attempts")
 
+    __table_args__ = (
+        Index("ix_test_attempts_user_paper", "user_id", "paper"),
+        Index("ix_test_attempts_paper", "paper"),
+    )
+
 
 class ChatMessage(Base):
     __tablename__ = "chat_messages"
@@ -54,7 +62,7 @@ class GeneratedQuestion(Base):
     __tablename__ = "generated_questions"
 
     id: Mapped[int] = mapped_column(primary_key=True)
-    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    user_id: Mapped[int | None] = mapped_column(ForeignKey("users.id"), nullable=True, index=True)
     session_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     paper: Mapped[str] = mapped_column(String(10))
     topic: Mapped[str] = mapped_column(String(255))

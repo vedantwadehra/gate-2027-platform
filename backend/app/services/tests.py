@@ -1,5 +1,6 @@
 """Mock test service: fetch questions and score attempts."""
 
+import math
 import random
 
 from app.data import questions as qb
@@ -181,8 +182,6 @@ def _topic_chunk_count(n: int) -> int:
     """Number of ~18Q sets for a topic pool: exact 15-20 splits when the
     interval math allows, else the closest graceful option (single slightly
     larger set, or even parts marginally over 20 — never stubby fragments)."""
-    import math
-
     if n <= 0:
         return 0
     if n <= 22:

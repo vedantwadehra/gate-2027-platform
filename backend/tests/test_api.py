@@ -291,3 +291,53 @@ def test_save_generated_validates_answer_index(client):
         "options": ["a", "b"], "answer_index": 5,
     }
     assert client.post("/api/generate/save", json=bad).status_code == 400
+
+
+def _ci_user(client, tag):
+    email = f"ci_sess_{tag}@test.com"
+    r = client.post("/api/auth/register", json={"email": email, "password": "pw12345"})
+    assert r.status_code == 200
+    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+
+
+def _ci_seed_chat(db_uid_email, n_sess=2):
+    db = SessionLocal()
+    try:
+        u = db.query(models.User).filter_by(email=db_uid_email).first()
+        for i in range(n_sess):
+            sid = f"ci-sess-{db_uid_email}-{i}"
+            db.add(models.ChatMessage(user_id=u.id, session_id=sid, paper="DA",
+                                      role="user", content=f"hello {i}"))
+            db.add(models.ChatMessage(user_id=u.id, session_id=sid, paper="DA",
+                                      role="assistant", content=f"hi {i}"))
+        db.commit()
+    finally:
+        db.close()
+
+
+def test_chat_sessions_list_and_isolation(client):
+    h1 = _ci_user(client, "a1")
+    h2 = _ci_user(client, "a2")
+    _ci_seed_chat("ci_sess_a1@test.com", n_sess=2)
+    _ci_seed_chat("ci_sess_a2@test.com", n_sess=1)
+    assert client.get("/api/chat/sessions?paper=DA").status_code == 401
+    l1 = client.get("/api/chat/sessions?paper=DA", headers=h1).json()
+    assert sorted(s["session_id"] for s in l1) == [
+        "ci-sess-ci_sess_a1@test.com-0", "ci-sess-ci_sess_a1@test.com-1"]
+    assert all(s["messages"] == 2 and s["preview"].startswith("hello") for s in l1)
+    l2 = client.get("/api/chat/sessions?paper=DA", headers=h2).json()
+    assert len(l2) == 1 and "a2" in l2[0]["session_id"]
+
+
+def test_chat_session_delete_ownership(client):
+    h1 = _ci_user(client, "b1")
+    h2 = _ci_user(client, "b2")
+    _ci_seed_chat("ci_sess_b1@test.com", n_sess=1)
+    _ci_seed_chat("ci_sess_b2@test.com", n_sess=1)
+    sid1 = "ci-sess-ci_sess_b1@test.com-0"
+    sid2 = "ci-sess-ci_sess_b2@test.com-0"
+    assert client.delete(f"/api/chat/sessions/{sid2}", headers=h1).json() == {"deleted": 0}
+    assert client.delete(f"/api/chat/sessions/{sid1}", headers=h1).json() == {"deleted": 2}
+    assert client.get("/api/chat/sessions?paper=DA", headers=h1).json() == []
+    # anonymous capability delete by exact id
+    assert client.delete(f"/api/chat/sessions/{sid2}").json() == {"deleted": 2}
