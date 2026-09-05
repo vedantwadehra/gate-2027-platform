@@ -41,6 +41,9 @@ def _run_migrations() -> None:
             "answer_num": "FLOAT",
             "answer_tol": "FLOAT",
         },
+        "generated_questions": {
+            "section": "VARCHAR(64)",
+        },
     }
     inspector = sa_inspect(engine)
     present = set(inspector.get_table_names())

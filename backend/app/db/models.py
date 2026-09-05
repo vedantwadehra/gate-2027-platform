@@ -66,6 +66,7 @@ class GeneratedQuestion(Base):
     session_id: Mapped[str | None] = mapped_column(String(64), index=True, nullable=True)
     paper: Mapped[str] = mapped_column(String(10))
     topic: Mapped[str] = mapped_column(String(255))
+    section: Mapped[str | None] = mapped_column(String(64), nullable=True)
     question: Mapped[str] = mapped_column(String(2000))
     options: Mapped[list] = mapped_column(JSON)
     answer_index: Mapped[int] = mapped_column(Integer, default=-1)

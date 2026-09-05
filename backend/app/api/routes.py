@@ -732,6 +732,18 @@ async def generate_question(req: GenerateRequest, db: Session = Depends(get_db))
     return q
 
 
+def _classify_saved_section(paper: str, text: str, options: list[str] | None) -> str | None:
+    """Map tutor-generated question text onto a syllabus section id (or None
+    for unclassifiable -> displayed under General)."""
+    from app.data import parse_test_series as pts
+
+    subj = pts.guess_subject((text or "") + " " + " ".join(options or []), None)
+    if subj == "unknown":
+        return None
+    papers, secmap = pts.SUBJECTS.get(subj, ((), {}))
+    return secmap.get(paper)
+
+
 @api.post("/generate/save")
 async def save_generated(req: SaveQuestion, user: dict | None = Depends(get_current_user)):
     if req.paper not in ("DA", "CS"):
@@ -743,6 +755,7 @@ async def save_generated(req: SaveQuestion, user: dict | None = Depends(get_curr
         session_id=req.session_id[:64] if req.session_id else None,
         paper=req.paper,
         topic=req.topic[:255],
+        section=_classify_saved_section(req.paper, req.question, req.options),
         question=req.question[:2000],
         options=req.options,
         answer_index=req.answer_index,
@@ -788,18 +801,35 @@ def saved_questions(
     else:
         q = q.filter(models.GeneratedQuestion.session_id.in_(ids))
     rows = q.order_by(models.GeneratedQuestion.created_at.desc()).limit(100).all()
-    return [
-        {
-            "id": r.id,
-            "paper": r.paper,
-            "topic": r.topic,
-            "question": r.question,
-            "options": r.options,
-            "answer_index": r.answer_index,
-            "explanation": r.explanation,
-        }
-        for r in rows
-    ]
+    names: dict[str, str] = {}
+    for p in ("DA", "CS"):
+        for s in syllabus.get_sections(p):
+            names[s["id"]] = s["name"]
+    out = []
+    dirty = False
+    for r in rows:
+        sec = r.section
+        if not sec:
+            sec = _classify_saved_section(r.paper, r.question, r.options)
+            if sec:
+                r.section = sec
+                dirty = True
+        out.append(
+            {
+                "id": r.id,
+                "paper": r.paper,
+                "topic": r.topic,
+                "section": sec,
+                "section_name": names.get(sec or "", "General"),
+                "question": r.question,
+                "options": r.options,
+                "answer_index": r.answer_index,
+                "explanation": r.explanation,
+            }
+        )
+    if dirty:
+        db.commit()
+    return out
 
 
 # ---------- Bookmark / flag questions ----------
