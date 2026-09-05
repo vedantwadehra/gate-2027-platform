@@ -38,6 +38,23 @@ services:
         generateValue: true
       - key: CORS_ORIGINS
         value: https://gate2027-frontend.onrender.com
+      - key: FRONTEND_URL
+        value: https://gate2027-frontend.onrender.com
+      # Social login (optional): create one OAuth app per provider with
+      # redirect URI https://gate2027-backend.onrender.com/api/auth/oauth/{google|github|facebook}/callback
+      # then paste the credentials below (leave empty to disable a provider).
+      - key: GOOGLE_CLIENT_ID
+        sync: false
+      - key: GOOGLE_CLIENT_SECRET
+        sync: false
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: FACEBOOK_CLIENT_ID
+        sync: false
+      - key: FACEBOOK_CLIENT_SECRET
+        sync: false
 
   - type: web
     name: gate2027-frontend

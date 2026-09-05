@@ -2,7 +2,7 @@
 
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
 import { setSession } from "../lib/auth";
 
@@ -14,6 +14,21 @@ export default function AuthPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
   const [busy, setBusy] = useState(false);
+  const [providers, setProviders] = useState<Record<string, boolean>>({});
+
+  useEffect(() => {
+    fetch("/api/auth/providers")
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((d) => setProviders(d))
+      .catch(() => {});
+  }, []);
+
+  useEffect(() => {
+    fetch("/api/auth/providers")
+      .then((r) => (r.ok ? r.json() : {}))
+      .then((d) => setProviders(d))
+      .catch(() => {});
+  }, []);
 
   async function submit() {
     setError("");
@@ -28,9 +43,16 @@ export default function AuthPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify(body),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
       if (!res.ok) {
-        setError(data.detail || "Something went wrong");
+        const d = data && (data as { detail?: unknown }).detail;
+        setError(
+          typeof d === "string"
+            ? d
+            : Array.isArray(d)
+              ? d.map((e) => (typeof e === "string" ? e : e?.msg || "Invalid input")).join("; ")
+              : "Something went wrong"
+        );
         return;
       }
       setSession(data.access_token, data.user.email);
@@ -79,6 +101,12 @@ export default function AuthPage() {
           onChange={(e) => setPassword(e.target.value)}
           style={inp}
         />
+        {mode === "register" && (
+          <div className="muted" style={{ fontSize: 12 }}>
+            Passwords need at least 6 characters. After registering you stay
+            logged in on this device.
+          </div>
+        )}
         {error && <div style={{ color: "var(--danger)", fontSize: 13 }}>{error}</div>}
         <button className="btn" onClick={submit} disabled={busy || !email || !password}>
           {busy ? "Please wait…" : mode === "login" ? "Login" : "Register"}
@@ -91,6 +119,35 @@ export default function AuthPage() {
             ? "Need an account? Register"
             : "Have an account? Login"}
         </button>
+        {(providers.google || providers.github || providers.facebook) && (
+          <>
+            <div
+              className="muted"
+              style={{ textAlign: "center", fontSize: 12 }}
+            >
+              — or continue with —
+            </div>
+            {(
+              [
+                ["google", "Google"],
+                ["github", "GitHub"],
+                ["facebook", "Facebook"],
+              ] as [string, string][]
+            )
+              .filter(([p]) => providers[p])
+              .map(([p, label]) => (
+                <button
+                  key={p}
+                  className="btn secondary"
+                  onClick={() => {
+                    window.location.href = `/api/auth/oauth/${p}`;
+                  }}
+                >
+                  Continue with {label}
+                </button>
+              ))}
+          </>
+        )}
       </div>
     </div>
   );

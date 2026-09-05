@@ -762,18 +762,31 @@ async def save_generated(req: SaveQuestion, user: dict | None = Depends(get_curr
 def saved_questions(
     paper: str | None = None,
     session_id: str | None = None,
+    session_ids: str | None = None,
     user: dict | None = Depends(get_current_user),
     db: Session = Depends(get_db),
 ):
-    if not session_id and not user:
+    from sqlalchemy import or_ as _or
+
+    ids = [s.strip() for s in (session_ids or "").split(",") if s.strip()][:50]
+    if session_id:
+        ids.append(session_id)
+    if not ids and not user:
         return []
     q = db.query(models.GeneratedQuestion)
     if paper:
         q = q.filter(models.GeneratedQuestion.paper == paper)
-    if session_id:
-        q = q.filter(models.GeneratedQuestion.session_id == session_id)
-    else:
+    if user and ids:
+        q = q.filter(
+            _or(
+                models.GeneratedQuestion.user_id == int(user["sub"]),
+                models.GeneratedQuestion.session_id.in_(ids),
+            )
+        )
+    elif user:
         q = q.filter(models.GeneratedQuestion.user_id == int(user["sub"]))
+    else:
+        q = q.filter(models.GeneratedQuestion.session_id.in_(ids))
     rows = q.order_by(models.GeneratedQuestion.created_at.desc()).limit(100).all()
     return [
         {

@@ -8,6 +8,7 @@ from app.db.session import engine, Base
 from app.db import models  # noqa: F401 ensure models imported for create_all
 from app.api import routes
 from app.api import auth as auth_routes
+from app.api import oauth as oauth_routes
 from sqlalchemy import inspect as sa_inspect, text
 
 
@@ -172,6 +173,7 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
 app.add_middleware(RateLimitMiddleware)
 
 app.include_router(auth_routes.auth, prefix="/api")
+app.include_router(oauth_routes.oauth, prefix="/api")
 app.include_router(routes.api, prefix="/api")
 
 

@@ -1,5 +1,7 @@
 """Backend API + service tests (run against a temporary SQLite DB)."""
 
+from fastapi import HTTPException
+
 from app.api import routes
 from app.db import models
 from app.db.session import SessionLocal
@@ -353,3 +355,79 @@ def test_generate_returns_question_shape(client):
     assert bad.status_code == 400
     empty = client.post("/api/generate", json={"paper": "DA", "topic": "   "})
     assert empty.status_code == 400
+
+
+def test_oauth_unconfigured_paths(client):
+    assert client.get("/api/auth/providers").json() == {
+        "google": False, "github": False, "facebook": False}
+    assert client.get("/api/auth/oauth/google").status_code == 400
+    assert client.get("/api/auth/oauth/github/callback").status_code == 400
+    assert client.get(
+        "/api/auth/oauth/google/callback?code=x&state=tampered").status_code == 400
+
+
+def test_oauth_state_roundtrip():
+    import time
+    from app.api.oauth import _sign_state, _verify_state
+    good = _sign_state({"nonce": "abc", "ts": time.time()})
+    assert _verify_state(good) is None
+    for bad in (good + "x", "garbage", ""):
+        try:
+            _verify_state(bad)
+            raise SystemExit(f"state accepted: {bad!r}")
+        except HTTPException:
+            pass
+    old = _sign_state({"nonce": "abc", "ts": time.time() - 99999})
+    try:
+        _verify_state(old)
+        raise SystemExit("expired state accepted")
+    except HTTPException:
+        pass
+
+
+def test_save_visible_with_token_and_session_ids(client):
+    h = _ci_user(client, "save1")
+    tok = h["Authorization"].split()[1]
+    # authed save -> visible via user link
+    r = client.post("/api/generate/save", headers=h, json={
+        "paper": "DA", "topic": "t", "question": "Authed Q?",
+        "options": ["a", "b"], "answer_index": 0, "session_id": "sess-x"})
+    assert r.status_code == 200
+    mine = client.get("/api/questions/saved", headers=h).json()
+    assert any(q["question"] == "Authed Q?" for q in mine)
+    # anonymous save -> visible via session_ids (the reported bug)
+    r2 = client.post("/api/generate/save", json={
+        "paper": "DA", "topic": "t", "question": "Anon Q?",
+        "options": ["a", "b"], "answer_index": 1, "session_id": "sess-anon-1"})
+    assert r2.status_code == 200
+    assert client.get("/api/questions/saved?session_ids=sess-anon-1").json()[0]["question"] == "Anon Q?"
+    assert client.get("/api/questions/saved?session_ids=nope").json() == []
+
+
+def test_simultaneous_users_isolated(client):
+    import concurrent.futures
+    h1 = _ci_user(client, "sim1")
+    h2 = _ci_user(client, "sim2")
+
+    def who(h):
+        return client.get("/api/me", headers=h).json()["email"]
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=8) as ex:
+        got = list(ex.map(who, [h1, h2] * 10))
+    assert got[::2] == ["ci_sess_sim1@test.com"] * 10
+    assert got[1::2] == ["ci_sess_sim2@test.com"] * 10
+
+
+def test_register_validation_contract(client):
+    # Short password -> 422 with a detail payload the UI stringifies safely.
+    r = client.post("/api/auth/register",
+                    json={"email": "shortpw@t.com", "password": "123"})
+    assert r.status_code == 422
+    # Full happy path: register -> token works on a protected route.
+    r2 = client.post("/api/auth/register",
+                     json={"email": "newbie@t.com", "name": "New",
+                           "password": "pw12345"})
+    assert r2.status_code == 200 and r2.json()["access_token"]
+    me = client.get("/api/me",
+                    headers={"Authorization": f"Bearer {r2.json()['access_token']}"})
+    assert me.status_code == 200 and me.json()["email"] == "newbie@t.com"

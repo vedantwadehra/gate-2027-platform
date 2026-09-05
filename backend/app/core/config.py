@@ -27,6 +27,19 @@ class Settings(BaseSettings):
     # CORS (comma separated list of allowed origins)
     cors_origins: str = "http://localhost:3000"
 
+    # Public frontend origin (OAuth callbacks redirect here).
+    frontend_url: str = "https://gate2027-frontend.onrender.com"
+
+    # OAuth providers (leave empty to disable a provider). Register one app
+    # per provider with redirect URI:
+    #   {backend}/api/auth/oauth/{google|github|facebook}/callback
+    google_client_id: str = ""
+    google_client_secret: str = ""
+    github_client_id: str = ""
+    github_client_secret: str = ""
+    facebook_client_id: str = ""
+    facebook_client_secret: str = ""
+
     @property
     def cors_origin_list(self) -> list[str]:
         return [o.strip() for o in self.cors_origins.split(",") if o.strip()]

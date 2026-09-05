@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import Markdown from "../components/Markdown";
+import { getToken } from "../lib/auth";
 
 type GQ = {
   id: number;
@@ -14,22 +15,27 @@ type GQ = {
   explanation: string;
 };
 
-function getSession(): string {
-  let s = localStorage.getItem("gate_session");
-  if (!s) {
-    s = Math.random().toString(36).slice(2) + Date.now().toString(36);
-    localStorage.setItem("gate_session", s);
-  }
-  return s;
-}
-
 export default function MyQuestionsPage() {
   const [items, setItems] = useState<GQ[]>([]);
   const [loading, setLoading] = useState(true);
   const [revealed, setRevealed] = useState<Record<number, boolean>>({});
 
   useEffect(() => {
-    fetch(`/api/questions/saved?session_id=${getSession()}`)
+    // Logged-in rows link by user; anonymous rows link by the device's
+    // known chat session ids (the tutor tracks these on every send).
+    let ids: string[] = [];
+    try {
+      const raw = localStorage.getItem("gate_sessions");
+      const list = raw ? JSON.parse(raw) : [];
+      ids = list.map((s: { session_id: string }) => s.session_id).slice(0, 50);
+    } catch {
+      /* ignore */
+    }
+    const token = getToken();
+    const qs = ids.length ? `?session_ids=${encodeURIComponent(ids.join(","))}` : "";
+    fetch(`/api/questions/saved${qs}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
       .then((r) => (r.ok ? r.json() : []))
       .then((d: GQ[]) => setItems(d))
       .finally(() => setLoading(false));

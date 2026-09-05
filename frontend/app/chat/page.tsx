@@ -292,9 +292,13 @@ export default function ChatPage() {
 
   async function saveQuestion() {
     if (!genQ) return;
-    await fetch("/api/generate/save", {
+    const token = getToken();
+    const res = await fetch("/api/generate/save", {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers: {
+        "Content-Type": "application/json",
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+      },
       body: JSON.stringify({
         paper,
         topic: topic.trim(),
@@ -305,7 +309,8 @@ export default function ChatPage() {
         session_id: sessionRef.current,
       }),
     });
-    setSaved(true);
+    if (res.ok) setSaved(true);
+    else alert("Could not save this question. Please retry.");
   }
 
   return (
