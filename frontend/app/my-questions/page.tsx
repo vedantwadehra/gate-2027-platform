@@ -1,9 +1,8 @@
 'use client';
 
-"use client";
-
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import Markdown from "../components/Markdown";
 
 type GQ = {
   id: number;
@@ -56,7 +55,7 @@ export default function MyQuestionsPage() {
             <span className="paper-pill">{q.paper}</span>{" "}
             <span className="chip">{q.topic}</span>
           </div>
-          <div className="qtext">{q.question}</div>
+          <div className="qtext"><Markdown text={q.question} /></div>
           <div className="options">
             {q.options.map((opt, i) => {
               let cls = "option";
@@ -68,14 +67,14 @@ export default function MyQuestionsPage() {
                   onClick={() => setRevealed((r) => ({ ...r, [q.id]: true }))}
                 >
                   <span>{String.fromCharCode(65 + i)}.</span>
-                  <span>{opt}</span>
+                  <Markdown text={opt} />
                 </div>
               );
             })}
           </div>
           {revealed[q.id] && q.explanation && (
             <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-              <strong>Explanation:</strong> {q.explanation}
+              <strong>Explanation:</strong> <Markdown text={q.explanation} />
             </div>
           )}
         </div>

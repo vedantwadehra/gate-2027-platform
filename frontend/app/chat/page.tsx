@@ -376,9 +376,11 @@ export default function ChatPage() {
           </button>
         </div>
 
-        {genQ && (
+          {genQ && (
           <div style={{ marginTop: 14 }}>
-            <div style={{ fontWeight: 600, marginBottom: 10 }}>{genQ.question}</div>
+            <div style={{ fontWeight: 600, marginBottom: 10 }}>
+              <Markdown text={genQ.question} />
+            </div>
             <div className="options">
               {genQ.options.map((opt, i) => {
                 let cls = "option";
@@ -386,7 +388,7 @@ export default function ChatPage() {
                 return (
                   <div key={i} className={cls}>
                     <span>{String.fromCharCode(65 + i)}.</span>
-                    <span>{opt}</span>
+                    <Markdown text={opt} />
                   </div>
                 );
               })}
@@ -403,7 +405,8 @@ export default function ChatPage() {
             )}
             {showAnswer && genQ.explanation && (
               <div className="muted" style={{ marginTop: 10, fontSize: 13 }}>
-                <strong>Explanation:</strong> {genQ.explanation}
+                <strong>Explanation:</strong>{" "}
+                <Markdown text={genQ.explanation} />
               </div>
             )}
             <div style={{ marginTop: 12, display: "flex", gap: 10 }}>
