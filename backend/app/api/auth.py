@@ -1,5 +1,5 @@
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from app.core.security import (
@@ -15,14 +15,14 @@ auth = APIRouter()
 
 
 class RegisterReq(BaseModel):
-    email: str
-    name: str | None = None
-    password: str
+    email: str = Field(max_length=255)
+    name: str | None = Field(default=None, max_length=255)
+    password: str = Field(max_length=128)
 
 
 class LoginReq(BaseModel):
-    email: str
-    password: str
+    email: str = Field(max_length=255)
+    password: str = Field(max_length=128)
 
 
 class TokenRes(BaseModel):
@@ -37,10 +37,11 @@ def _public_user(u: models.User) -> dict:
 
 @auth.post("/auth/register", response_model=TokenRes)
 def register(payload: RegisterReq, db: Session = Depends(get_db)):
-    if db.query(models.User).filter(models.User.email == payload.email).first():
+    email = payload.email.strip().lower()
+    if db.query(models.User).filter(models.User.email == email).first():
         raise HTTPException(400, "Email already registered")
     user = models.User(
-        email=payload.email,
+        email=email,
         name=payload.name,
         password_hash=hash_password(payload.password),
     )
@@ -54,7 +55,8 @@ def register(payload: RegisterReq, db: Session = Depends(get_db)):
 
 @auth.post("/auth/login", response_model=TokenRes)
 def login(payload: LoginReq, db: Session = Depends(get_db)):
-    user = db.query(models.User).filter(models.User.email == payload.email).first()
+    email = payload.email.strip().lower()
+    user = db.query(models.User).filter(models.User.email == email).first()
     if not user or not verify_password(payload.password, user.password_hash or ""):
         raise HTTPException(401, "Invalid email or password")
     return TokenRes(

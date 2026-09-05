@@ -36,11 +36,26 @@ def _marks(q: dict) -> int:
     return m if m in (1, 2) else 1
 
 
+# Recent-attempt window for difficulty/adaptive stats: full-history scans get
+# linearly slower (and heavier) as usage grows; recent form predicts better.
+_RECENT_ATTEMPTS = 200
+
+
+def _recent_attempts(db: Session, paper: str) -> list:
+    return (
+        db.query(models.TestAttempt)
+        .filter_by(paper=paper)
+        .order_by(models.TestAttempt.id.desc())
+        .limit(_RECENT_ATTEMPTS)
+        .all()
+    )
+
+
 def _compute_difficulties(db: Session | None, paper: str) -> dict[str, str]:
     """Bucket questions into easy/medium/hard from historical answer accuracy."""
     if db is None:
         return {}
-    rows = db.query(models.TestAttempt).filter_by(paper=paper).all()
+    rows = _recent_attempts(db, paper)
     stat: dict[str, dict[str, int]] = {}
     for r in rows:
         for q in (r.details or {}).get("questions", []):
@@ -59,7 +74,7 @@ def _section_accuracy(db: Session | None, paper: str) -> dict[str, float]:
     """Per-section accuracy from attempt history (for adaptive selection)."""
     if db is None:
         return {}
-    rows = db.query(models.TestAttempt).filter_by(paper=paper).all()
+    rows = _recent_attempts(db, paper)
     acc: dict[str, dict[str, int]] = {}
     for r in rows:
         for sec, st in (r.details or {}).get("sections", {}).items():
@@ -133,9 +148,14 @@ def _interleave(qs: list[dict]) -> list[dict]:
     return out
 
 
-def count_paper_sets(paper: str, db: Session | None = None) -> int:
+def _load_pool(paper: str, db: Session | None) -> list[dict]:
+    return qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
+
+
+def count_paper_sets(paper: str, db: Session | None = None,
+                     pool: list[dict] | None = None) -> int:
     """How many complete, non-overlapping 65Q/100-mark GATE-pattern papers fit."""
-    qs = qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
+    qs = pool if pool is not None else _load_pool(paper, db)
     b = _split_buckets(_verified_pool(qs), paper)
     return min(len(b[key]) // quota for key, quota in _GATE_QUOTAS.items())
 
@@ -158,37 +178,46 @@ def list_topic_sets(paper: str, db: Session | None = None) -> list[dict]:
 
 
 def _topic_chunk_count(n: int) -> int:
+    """Number of ~18Q sets for a topic pool: exact 15-20 splits when the
+    interval math allows, else the closest graceful option (single slightly
+    larger set, or even parts marginally over 20 — never stubby fragments)."""
+    import math
+
     if n <= 0:
         return 0
+    if n <= 22:
+        return 1
+    lo, hi = math.ceil(n / 20), math.floor(n / 15)
+    if lo <= hi:
+        k = round(n / _TOPIC_TARGET)
+        return max(lo, min(hi, k))
     return max(1, round(n / _TOPIC_TARGET))
 
 
-def count_topic_sets(paper: str, section: str, db: Session | None = None) -> int:
-    qs = qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
-    pool = [q for q in _verified_pool(qs) if q["section"] == section]
-    return _topic_chunk_count(len(pool))
+def count_topic_sets(paper: str, section: str, db: Session | None = None,
+                     pool: list[dict] | None = None) -> int:
+    qs = pool if pool is not None else _load_pool(paper, db)
+    pool_sec = [q for q in _verified_pool(qs) if q["section"] == section]
+    return _topic_chunk_count(len(pool_sec))
 
 
 def build_topic_set(paper: str, section: str, set_idx: int,
-                    db: Session | None = None) -> list[dict]:
+                    db: Session | None = None,
+                    pool: list[dict] | None = None) -> list[dict]:
     """Deterministic Nth topic test (1-indexed) for a section: disjoint across
     sets, stable across calls. Raises ValueError if out of range."""
-    qs = qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
-    pool = [q for q in _verified_pool(qs) if q["section"] == section]
-    total = _topic_chunk_count(len(pool))
+    qs = pool if pool is not None else _load_pool(paper, db)
+    pool_sec = [q for q in _verified_pool(qs) if q["section"] == section]
+    total = _topic_chunk_count(len(pool_sec))
     if set_idx < 1 or set_idx > total:
         raise ValueError(f"topic set {set_idx} out of range (1..{total})")
     rng = random.Random(f"{_TOPIC_SEED_SALT}:{paper}:{section}")
-    ordered = _shuffled(pool, rng)
+    ordered = _shuffled(pool_sec, rng)
     # Even split so every set lands near 15-20 questions.
     base, extra = divmod(len(ordered), total)
     idx = (set_idx - 1) * base + min(set_idx - 1, extra)
     size = base + (1 if set_idx <= extra else 0)
     return ordered[idx: idx + size]
-    """How many complete, non-overlapping 65Q/100-mark GATE-pattern papers fit."""
-    qs = qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
-    b = _split_buckets(_verified_pool(qs), paper)
-    return min(len(b[key]) // quota for key, quota in _GATE_QUOTAS.items())
 
 
 def list_paper_sets(paper: str, db: Session | None = None) -> list[dict]:
@@ -219,14 +248,15 @@ def _roundrobin(lists: list[list[dict]]) -> list[dict]:
     return out
 
 
-def build_paper_set(paper: str, set_idx: int, db: Session | None = None) -> list[dict]:
+def build_paper_set(paper: str, set_idx: int, db: Session | None = None,
+                    pool: list[dict] | None = None) -> list[dict]:
     """Deterministic Nth full paper (1-indexed): disjoint across sets, stable
     across calls. Subject 1-mark block mixes 14 MCQ / 5 MSQ / 6 NAT and the
     2-mark block 11 / 9 / 10 (shortfalls backfilled with same-mark MCQs).
     Raises ValueError if out of range."""
-    qs = qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
+    qs = pool if pool is not None else _load_pool(paper, db)
     b = _split_buckets(_verified_pool(qs), paper)
-    total = count_paper_sets(paper, db)
+    total = count_paper_sets(paper, db, pool=qs)
     if set_idx < 1 or set_idx > total:
         raise ValueError(f"paper set {set_idx} out of range (1..{total})")
     rng = random.Random(f"{_SET_SEED_SALT}:{paper}")
@@ -268,19 +298,20 @@ def get_test(
     paper_set: int | None = None,
     topic_set: int | None = None,
 ) -> dict:
-    qs = qb.get_questions(paper, db) if db is not None else qb.QUESTIONS.get(paper, [])
+    pool = _load_pool(paper, db)
+    qs = pool
     is_full = mock == "full"
     sets_total = 0
     topic_sets_total = 0
-    if is_full and paper_set:
-        qs = build_paper_set(paper, paper_set, db)
+    if is_full and paper_set is not None:
+        qs = build_paper_set(paper, paper_set, db, pool=pool)
     elif is_full:
         qs = _build_full_mock(qs, paper)
-    elif section and topic_set:
-        qs = build_topic_set(paper, section, topic_set, db)
-        topic_sets_total = count_topic_sets(paper, section, db)
+    elif section and topic_set is not None:
+        qs = build_topic_set(paper, section, topic_set, db, pool=pool)
+        topic_sets_total = count_topic_sets(paper, section, db, pool=pool)
     if is_full:
-        sets_total = count_paper_sets(paper, db)
+        sets_total = count_paper_sets(paper, db, pool=pool)
     else:
         if section:
             qs = [q for q in qs if q["section"] == section]
@@ -338,9 +369,9 @@ def get_test(
         s["id"]: s["name"] for s in syllabus.get_sections(paper)
     }
     duration = 180 if is_full else cfg.get("duration_minutes", 30)
-    if is_full and paper_set:
+    if is_full and paper_set is not None:
         title = f"GATE {paper} Full-Length Paper {paper_set}"
-    elif section and topic_set:
+    elif section and topic_set is not None:
         sec_name = {s["id"]: s["name"] for s in syllabus.get_sections(paper)}.get(section, section)
         title = f"GATE {paper} Topic Test: {sec_name} {topic_set}"
         duration = max(15, round(len(qs) * 180 / 65))
@@ -386,11 +417,12 @@ def score_and_save(
         qt = _qtype(q)
         if qt == "MSQ":
             ok_set = set(q.get("answer_list") or [q.get("answer", 0)])
-            if chosen is None or (isinstance(chosen, list) and not chosen):
+            if chosen is None or isinstance(chosen, bool) or (isinstance(chosen, list) and not chosen):
                 awarded, is_correct = 0.0, False
             else:
                 picked = set(chosen) if isinstance(chosen, list) else {chosen}
                 # GATE MSQ: full marks only for the exact correct set, else zero.
+                # (bool excluded above: True == 1 in Python would false-match.)
                 is_correct = picked == ok_set
                 awarded = float(m) if is_correct else 0.0
             correct_opt = [q["options"][i] for i in sorted(ok_set)
@@ -400,7 +432,8 @@ def score_and_save(
             target = q.get("answer_num")
             tol = q.get("answer_tol", 0) or 0
             try:
-                val = float(chosen) if chosen is not None and chosen != "" else None
+                val = (None if chosen is None or chosen == "" or isinstance(chosen, bool)
+                       else float(chosen))
             except (TypeError, ValueError):
                 val = None
             # GATE NAT: within the official range scores; no negative marking.
@@ -409,7 +442,7 @@ def score_and_save(
             res_extra = {"correct_option": None,
                          "correct_value": target, "correct_tol": tol}
         else:
-            if chosen is None:
+            if chosen is None or isinstance(chosen, bool):
                 awarded, is_correct = 0.0, False
             elif chosen == q["answer"]:
                 awarded, is_correct = float(m), True

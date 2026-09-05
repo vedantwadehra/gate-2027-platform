@@ -25,7 +25,8 @@ export default function GuidePage() {
       .then((data) => {
         setSections(data.sections || []);
         setLoading(false);
-      });
+      })
+      .catch(() => setLoading(false));
   }, [paper]);
 
   return (

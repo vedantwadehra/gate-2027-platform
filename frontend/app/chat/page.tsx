@@ -1,7 +1,5 @@
 'use client';
 
-"use client";
-
 import { useEffect, useRef, useState } from "react";
 
 type Msg = { id: number; role: "user" | "bot"; text: string };
@@ -56,7 +54,7 @@ export default function ChatPage() {
             { id: msgId++, role: "bot", text: "(continued from earlier)" },
             ...hist.map((h) => ({
               id: msgId++,
-              role: h.role as "user" | "bot",
+              role: (h.role === "assistant" ? "bot" : h.role) as "user" | "bot",
               text: h.content,
             })),
           ]);
@@ -144,6 +142,7 @@ export default function ChatPage() {
     setGenBusy(true);
     setGenQ(null);
     setShowAnswer(false);
+    setSaved(false);
     try {
       const res = await fetch("/api/generate", {
         method: "POST",

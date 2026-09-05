@@ -87,6 +87,7 @@ async def _call_openai(
             {"role": "user", "content": _openai_user_content(user, image, image_media_type)},
         ],
         "temperature": 0.3,
+        "max_tokens": 1500,
     }
     headers = {"Authorization": f"Bearer {settings.llm_api_key}"}
     async with httpx.AsyncClient(timeout=30) as client:
@@ -119,6 +120,7 @@ async def _call_google(
     payload = {
         "systemInstruction": {"parts": [{"text": system}]},
         "contents": [{"role": "user", "parts": parts}],
+        "generationConfig": {"maxOutputTokens": 1500},
     }
     async with httpx.AsyncClient(timeout=30) as client:
         r = await client.post(url, json=payload)
@@ -142,6 +144,7 @@ async def _stream_openai(
             {"role": "user", "content": _openai_user_content(user, image, image_media_type)},
         ],
         "temperature": 0.3,
+        "max_tokens": 1500,
         "stream": True,
     }
     headers = {"Authorization": f"Bearer {settings.llm_api_key}"}

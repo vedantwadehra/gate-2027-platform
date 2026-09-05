@@ -76,6 +76,9 @@ def _run_migrations() -> None:
 _run_migrations()
 Base.metadata.create_all(bind=engine)
 
+if settings.jwt_secret == "dev-secret-change-me" or settings.admin_key == "admin-dev-key":
+    print("WARNING: running with default JWT_SECRET/ADMIN_KEY — set real values in production!")
+
 # Seed the DB-backed question bank from questions.py on first run.
 _inspector = sa_inspect(engine)
 if "questions" in set(_inspector.get_table_names()):
@@ -134,8 +137,19 @@ class RateLimitMiddleware(BaseHTTPMiddleware):
                 return JSONResponse(
                     status_code=429, content={"detail": "Rate limit exceeded. Try again shortly."}
                 )
-            buf.append(now)
-            self.hits[key] = buf
+            if buf:
+                buf.append(now)
+                self.hits[key] = buf
+            else:
+                # Don't retain idle keys; sweep when the map gets large.
+                self.hits.pop(key, None)
+                self.hits[key] = [now]
+                if len(self.hits) > 10000:
+                    self.hits = {
+                        k: [t for t in v if now - t < self.window]
+                        for k, v in self.hits.items()
+                    }
+                    self.hits = {k: v for k, v in self.hits.items() if v}
         return await call_next(request)
 
 

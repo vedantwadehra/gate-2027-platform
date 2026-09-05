@@ -243,3 +243,51 @@ def test_topic_set_build_and_range(client):
     assert [q["id"] for q in a["questions"]] == [q["id"] for q in b["questions"]]
     assert client.get("/api/test/DA?section=da_prob_stats&topic_set=9999").status_code == 400
     assert client.get("/api/test/DA?topic_set=1").status_code == 400
+
+
+def test_zero_set_rejected(client):
+    assert client.get("/api/test/DA?mock=full&set=0").status_code == 400
+    assert client.get("/api/test/DA?section=da_prob_stats&topic_set=0").status_code == 400
+
+
+def test_cache_upsert_no_duplicates(client):
+    from app.api.routes import _cache_set, _cache_get
+    db = SessionLocal()
+    try:
+        _cache_set(db, "ci-key-1", "v1")
+        _cache_set(db, "ci-key-1", "v2")
+        assert _cache_get(db, "ci-key-1") == "v2"
+        n = db.query(models.ResponseCache).filter_by(key="ci-key-1").count()
+        assert n == 1
+    finally:
+        db.query(models.ResponseCache).filter_by(key="ci-key-1").delete()
+        db.commit()
+        db.close()
+
+
+def test_submit_bool_answers_skipped(client):
+    t = client.get("/api/test/DA?mock=full&set=1").json()
+    qids = [q["id"] for q in t["questions"][:3]]
+    r = client.post(
+        "/api/test/submit",
+        json={"paper": "DA", "answers": {qid: True for qid in qids}, "qids": qids},
+    ).json()
+    assert r["correct"] == 0 and r["marks_obtained"] == 0
+
+
+def test_admin_create_rejects_overlong(client):
+    from app.core.config import settings
+    h = {"X-Admin-Key": settings.admin_key}
+    bad = {
+        "paper": "DA", "qid": "x" * 65, "section": "da_prob_stats",
+        "text": "t", "options": ["a", "b"], "answer": 0,
+    }
+    assert client.post("/api/admin/questions", json=bad, headers=h).status_code == 400
+
+
+def test_save_generated_validates_answer_index(client):
+    bad = {
+        "paper": "DA", "topic": "t", "question": "q?",
+        "options": ["a", "b"], "answer_index": 5,
+    }
+    assert client.post("/api/generate/save", json=bad).status_code == 400

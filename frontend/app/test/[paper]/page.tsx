@@ -188,6 +188,7 @@ export default function TestPage() {
         setData(d);
         setAnswers({});
         setMarked({});
+        setActiveQ(0);
         setResult(null);
         submittedRef.current = false;
         setSecondsLeft(d.duration_minutes * 60);

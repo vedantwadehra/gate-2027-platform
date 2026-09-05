@@ -30,7 +30,9 @@ def require_admin(
     x_admin_key: str | None = Header(None, alias="X-Admin-Key"),
     user: dict | None = Depends(get_current_user),
 ) -> bool:
-    if x_admin_key and x_admin_key == settings.admin_key:
+    import hmac
+
+    if x_admin_key and hmac.compare_digest(x_admin_key, settings.admin_key):
         return True
     if user is not None and user.get("is_admin"):
         return True
@@ -44,14 +46,37 @@ def _cache_key(*parts: str) -> str:
     return hashlib.sha256("||".join(parts).encode()).hexdigest()[:64]
 
 
+_CACHE_MAX_ROWS = 2000  # bound table growth; oldest entries evicted first
+# Upload caps: unbounded reads let one request exhaust container memory.
+_MAX_IMAGE_BYTES = 10 * 1024 * 1024
+_MAX_NOTE_BYTES = 15 * 1024 * 1024
+
+
 def _cache_get(db: Session, key: str) -> str | None:
     row = db.query(models.ResponseCache).filter_by(key=key).first()
     return row.value if row else None
 
 
 def _cache_set(db: Session, key: str, value: str) -> None:
-    db.add(models.ResponseCache(key=key, value=value))
+    row = db.query(models.ResponseCache).filter_by(key=key).first()
+    if row is None:
+        db.add(models.ResponseCache(key=key, value=value))
+    else:
+        row.value = value
     db.commit()
+    over = db.query(models.ResponseCache.id).count() - _CACHE_MAX_ROWS
+    if over > 0:
+        stale = [
+            r[0]
+            for r in db.query(models.ResponseCache.id)
+            .order_by(models.ResponseCache.id)
+            .limit(over)
+            .all()
+        ]
+        db.query(models.ResponseCache).filter(
+            models.ResponseCache.id.in_(stale)
+        ).delete(synchronize_session=False)
+        db.commit()
 
 
 # ---------- Schemas ----------
@@ -154,6 +179,8 @@ def get_test(
         rows = (
             db.query(models.TestAttempt)
             .filter(models.TestAttempt.user_id == uid, models.TestAttempt.paper == paper)
+            .order_by(models.TestAttempt.id.desc())
+            .limit(200)
             .all()
         )
         sec_acc: dict[str, dict[str, int]] = {}
@@ -276,7 +303,7 @@ async def explain(paper: str, qid: str, db: Session = Depends(get_db)):
     if cached:
         return {"explanation": cached.text, "cached": True, "generated": False}
     text = await explain_service.explain_question(paper, q)
-    db.add(models.Explanation(paper=paper, qid=qid, text=text))
+    db.add(models.Explanation(paper=paper, qid=qid, text=text[:4000]))
     db.commit()
     return {"explanation": text, "cached": False, "generated": True}
 
@@ -294,6 +321,7 @@ def my_attempts(
         db.query(models.TestAttempt)
         .filter(models.TestAttempt.user_id == int(user["sub"]))
         .order_by(models.TestAttempt.created_at.desc())
+        .limit(100)
         .all()
     )
     return [
@@ -325,6 +353,7 @@ def analytics(
         db.query(models.TestAttempt)
         .filter(models.TestAttempt.user_id == int(user["sub"]))
         .order_by(models.TestAttempt.created_at.asc())
+        .limit(500)
         .all()
     )
     if not rows:
@@ -465,6 +494,8 @@ async def chat_stream(
     ocr_text = ""
     if image is not None and image.filename:
         raw = await image.read()
+        if raw and len(raw) > _MAX_IMAGE_BYTES:
+            raise HTTPException(413, "Image too large (max 10 MB)")
         if raw:
             image_bytes = raw
             image_media = image.content_type or "image/png"
@@ -511,10 +542,10 @@ async def chat_stream(
         db.add(
             models.ChatMessage(
                 user_id=int(user["sub"]) if user else None,
-                session_id=session_id,
+                session_id=session_id[:64],
                 paper=paper,
                 role="user",
-                content=final_message,
+                content=final_message[:8000],
             )
         )
         db.commit()
@@ -536,6 +567,7 @@ async def chat_stream(
             yield "data: [DONE]\n\n"
             return
 
+        ok = True
         try:
             async for token in chat_service.answer_question_stream(
                 paper,
@@ -548,7 +580,9 @@ async def chat_stream(
                 full_reply += token
                 yield f"data: {json.dumps({'token': token})}\n\n"
         except Exception:
-            # Never surface a raw provider error to the chat UI.
+            # Never surface a raw provider error to the chat UI (and never
+            # cache the fallback: a transient outage must not go sticky).
+            ok = False
             full_reply = (
                 "Sorry, the tutor couldn't process that right now. "
                 "If you attached an image, try a vision-capable model or rephrase "
@@ -562,16 +596,17 @@ async def chat_stream(
                 sdb.add(
                     models.ChatMessage(
                         user_id=int(user["sub"]) if user else None,
-                        session_id=session_id,
+                        session_id=session_id[:64],
                         paper=paper,
                         role="assistant",
-                        content=full_reply,
+                        content=full_reply[:8000],
                     )
                 )
                 sdb.commit()
             finally:
                 sdb.close()
-        _cache_set(db, cache_key, full_reply)
+        if ok:
+            _cache_set(db, cache_key, full_reply)
         yield "data: [DONE]\n\n"
 
     return StreamingResponse(event_gen(), media_type="text/event-stream")
@@ -616,15 +651,17 @@ async def generate_question(req: GenerateRequest, db: Session = Depends(get_db))
 async def save_generated(req: SaveQuestion, user: dict | None = Depends(get_current_user)):
     if req.paper not in ("DA", "CS"):
         raise HTTPException(400, "Unknown paper")
+    if req.answer_index != -1 and not (0 <= req.answer_index < len(req.options)):
+        raise HTTPException(400, "answer_index out of range for options")
     gq = models.GeneratedQuestion(
         user_id=int(user["sub"]) if user else None,
-        session_id=req.session_id,
+        session_id=req.session_id[:64] if req.session_id else None,
         paper=req.paper,
-        topic=req.topic,
-        question=req.question,
+        topic=req.topic[:255],
+        question=req.question[:2000],
         options=req.options,
         answer_index=req.answer_index,
-        explanation=req.explanation,
+        explanation=req.explanation[:2000],
     )
     db = SessionLocal()
     try:
@@ -705,11 +742,11 @@ def toggle_bookmark(
             user_id=uid,
             paper=req.paper,
             qid=req.qid,
-            section=q.get("section"),
-            text=q["text"],
+            section=(q.get("section") or "")[:64],
+            text=q["text"][:2000],
             options=q["options"],
             answer=q["answer"],
-            explanation=q.get("explanation", ""),
+            explanation=(q.get("explanation", "") or "")[:2000],
         )
     )
     db.commit()
@@ -726,6 +763,7 @@ def list_bookmarks(
         db.query(models.Bookmark)
         .filter_by(user_id=uid)
         .order_by(models.Bookmark.created_at.desc())
+        .limit(200)
         .all()
     )
     return [
@@ -762,7 +800,7 @@ def update_bookmark(
     if not bm:
         raise HTTPException(404, "Bookmark not found")
     if payload.folder is not None:
-        bm.folder = payload.folder or None
+        bm.folder = (payload.folder[:64] if payload.folder else None)
     if payload.tags is not None:
         bm.tags = [t for t in payload.tags if t]
     db.commit()
@@ -779,13 +817,19 @@ def bookmarks_test(
     uid = _require_user(user)
     if paper not in ("DA", "CS"):
         raise HTTPException(400, "Unknown paper")
-    rows = db.query(models.Bookmark).filter_by(user_id=uid, paper=paper).all()
+    rows = db.query(models.Bookmark).filter_by(user_id=uid, paper=paper).order_by(models.Bookmark.created_at.desc()).limit(120).all()
+    bank = {
+        q["id"]: (q.get("marks", 1), (q.get("qtype") or "MCQ"))
+        for q in qb.get_questions(paper, db)
+    }
     questions = [
         {
             "id": b.qid,
             "section": b.section,
             "text": b.text,
             "options": b.options,
+            "marks": bank.get(b.qid, (1, "MCQ"))[0],
+            "qtype": bank.get(b.qid, (1, "MCQ"))[1],
             "year": None,
             "source": "bookmark",
             "verified": False,
@@ -800,6 +844,7 @@ def bookmarks_test(
         "is_full": False,
         "is_bookmark_test": True,
         "duration_minutes": duration,
+        "total_marks": sum(q["marks"] for q in questions),
         "title": f"Bookmarked questions practice · {paper}",
         "section_names": section_names,
         "questions": questions,
@@ -813,7 +858,13 @@ def review_wrong(
     db: Session = Depends(get_db),
 ):
     uid = _require_user(user)
-    attempts = db.query(models.TestAttempt).filter_by(user_id=uid).all()
+    attempts = (
+        db.query(models.TestAttempt)
+        .filter_by(user_id=uid)
+        .order_by(models.TestAttempt.id.desc())
+        .limit(200)
+        .all()
+    )
     wrong: dict[str, str] = {}
     for a in attempts:
         for q in (a.details or {}).get("questions", []):
@@ -894,6 +945,8 @@ async def import_notes(
             raw = await f.read()
             if not raw:
                 continue
+            if len(raw) > _MAX_NOTE_BYTES:
+                raise HTTPException(413, f"File too large (max 15 MB): {f.filename}")
             name = (f.filename or "").lower()
             if name.endswith(".pdf"):
                 content += "\n" + _extract_pdf(raw)
@@ -905,13 +958,13 @@ async def import_notes(
         raise HTTPException(400, "Provide notes text or upload a file")
     cards = await chat_service.generate_flashcards(paper, content)
     created = 0
-    for c in cards:
+    for c in cards[:25]:
         db.add(
             models.Flashcard(
                 user_id=uid,
                 paper=paper,
-                front=c.get("front", ""),
-                back=c.get("back", ""),
+                front=str(c.get("front", ""))[:1000],
+                back=str(c.get("back", ""))[:2000],
                 source="notes",
             )
         )
@@ -1141,6 +1194,10 @@ def admin_create_question(
         raise HTTPException(409, "qid already exists for this paper")
     if payload.paper not in ("DA", "CS"):
         raise HTTPException(400, "Unknown paper")
+    for field, limit in (("qid", 64), ("section", 64), ("text", 4000),
+                         ("explanation", 4000), ("source", 256)):
+        if len(str(getattr(payload, field, "") or "")) > limit:
+            raise HTTPException(400, f"{field} too long (max {limit} chars)")
     if not (0 <= payload.answer < len(payload.options)):
         raise HTTPException(400, "answer index out of range for options")
     q = models.Question(**payload.model_dump())
@@ -1168,6 +1225,10 @@ def admin_update_question(
         raise HTTPException(404, "Question not found")
     if not (0 <= payload.answer < len(payload.options)):
         raise HTTPException(400, "answer index out of range for options")
+    for field, limit in (("qid", 64), ("section", 64), ("text", 4000),
+                         ("explanation", 4000), ("source", 256)):
+        if len(str(getattr(payload, field, "") or "")) > limit:
+            raise HTTPException(400, f"{field} too long (max {limit} chars)")
     for field, value in payload.model_dump().items():
         setattr(q, field, value)
     q.updated_at = _now()
