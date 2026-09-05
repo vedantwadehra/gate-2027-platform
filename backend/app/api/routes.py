@@ -98,6 +98,7 @@ class ChatRequest(BaseModel):
 class GenerateRequest(BaseModel):
     paper: str
     topic: str
+    model: str | None = None
 
 
 class SaveQuestion(BaseModel):

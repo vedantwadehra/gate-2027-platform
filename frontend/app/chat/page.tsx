@@ -271,11 +271,16 @@ export default function ChatPage() {
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ paper, topic: t }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => null);
+      if (!res.ok || !data || typeof data.question !== "string") {
+        throw new Error(
+          (data && data.detail) || `Generation failed (${res.status}). Please retry.`
+        );
+      }
       setGenQ(data);
-    } catch {
+    } catch (e: unknown) {
       setGenQ({
-        question: "[Generation failed — check the backend LLM key.]",
+        question: e instanceof Error ? e.message : "Generation failed. Please retry.",
         options: [],
         answer_index: -1,
         explanation: "",

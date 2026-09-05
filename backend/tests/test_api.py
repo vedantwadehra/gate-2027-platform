@@ -341,3 +341,15 @@ def test_chat_session_delete_ownership(client):
     assert client.get("/api/chat/sessions?paper=DA", headers=h1).json() == []
     # anonymous capability delete by exact id
     assert client.delete(f"/api/chat/sessions/{sid2}").json() == {"deleted": 2}
+
+
+def test_generate_returns_question_shape(client):
+    r = client.post("/api/generate", json={"paper": "DA", "topic": "probability"})
+    assert r.status_code == 200, r.text[:200]
+    body = r.json()
+    assert isinstance(body.get("question"), str) and body["question"]
+    assert r.status_code == 200
+    bad = client.post("/api/generate", json={"paper": "XX", "topic": "x"})
+    assert bad.status_code == 400
+    empty = client.post("/api/generate", json={"paper": "DA", "topic": "   "})
+    assert empty.status_code == 400
