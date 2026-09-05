@@ -21,6 +21,23 @@ export function normalizeMathDelims(src: string): string {
     .join('');
 }
 
+/** Escape bare # inside math spans: KaTeX treats # as a macro-parameter
+ *  character and hard-errors (red raw text), even inside \text{}. \# renders
+ *  a literal #. Only spans outside code fences are touched; prose and code
+ *  (e.g. Python comments) are never altered. Over-matching a $...$ span is
+ *  harmless — spans without # are returned unchanged. */
+export function sanitizeMathHashes(src: string): string {
+  const parts = src.split(/(```[\s\S]*?```)/g);
+  return parts
+    .map((seg, i) => {
+      if (i % 2 === 1) return seg;
+      return seg
+        .replace(/\$\$([\s\S]*?)\$\$/g, (_, m: string) => `$$${m.replace(/(?<!\\)#/g, '\\#')}$$`)
+        .replace(/\$([^$\n]+?)\$/g, (_, m: string) => `$${m.replace(/(?<!\\)#/g, '\\#')}$`);
+    })
+    .join('');
+}
+
 const rehypePlugins: PluggableList = [
   [rehypeKatex, { throwOnError: false, strict: false }],
 ];
@@ -35,7 +52,7 @@ export default function Markdown({ text }: { text: string }) {
         remarkPlugins={[remarkGfm, remarkMath]}
         rehypePlugins={rehypePlugins}
       >
-        {normalizeMathDelims(text)}
+        {sanitizeMathHashes(normalizeMathDelims(text))}
       </ReactMarkdown>
       <style jsx>{`
         .md > :first-child {
