@@ -732,16 +732,25 @@ async def generate_question(req: GenerateRequest, db: Session = Depends(get_db))
     return q
 
 
-def _classify_saved_section(paper: str, text: str, options: list[str] | None) -> str | None:
-    """Map tutor-generated question text onto a syllabus section id (or None
-    for unclassifiable -> displayed under General)."""
+def _classify_saved(paper: str, text: str,
+                    options: list[str] | None) -> tuple[str, str | None]:
+    """Decide the (paper, section) a tutor-generated question files under.
+
+    Single-paper subjects (compiler/OS/TOC/networks/COA/digital -> CS;
+    ML/AI -> DA) authoritatively correct the chat's paper toggle, so a
+    compiler question saved during a DA chat still lands in CS. Shared
+    subjects respect the toggle; unclassifiable text keeps it and files
+    under General.
+    """
     from app.data import parse_test_series as pts
 
     subj = pts.guess_subject((text or "") + " " + " ".join(options or []), None)
     if subj == "unknown":
-        return None
+        return paper, None
     papers, secmap = pts.SUBJECTS.get(subj, ((), {}))
-    return secmap.get(paper)
+    if len(papers) == 1:
+        return papers[0], secmap[papers[0]]
+    return paper, secmap.get(paper)
 
 
 @api.post("/generate/save")
@@ -750,12 +759,13 @@ async def save_generated(req: SaveQuestion, user: dict | None = Depends(get_curr
         raise HTTPException(400, "Unknown paper")
     if req.answer_index != -1 and not (0 <= req.answer_index < len(req.options)):
         raise HTTPException(400, "answer_index out of range for options")
+    want_paper, want_section = _classify_saved(req.paper, req.question, req.options)
     gq = models.GeneratedQuestion(
         user_id=int(user["sub"]) if user else None,
         session_id=req.session_id[:64] if req.session_id else None,
-        paper=req.paper,
+        paper=want_paper,
         topic=req.topic[:255],
-        section=_classify_saved_section(req.paper, req.question, req.options),
+        section=want_section,
         question=req.question[:2000],
         options=req.options,
         answer_index=req.answer_index,
@@ -808,12 +818,14 @@ def saved_questions(
     out = []
     dirty = False
     for r in rows:
+        want_paper, want_section = _classify_saved(r.paper, r.question, r.options)
+        if want_paper != r.paper:
+            r.paper = want_paper
+            dirty = True
+        if want_section and r.section != want_section:
+            r.section = want_section
+            dirty = True
         sec = r.section
-        if not sec:
-            sec = _classify_saved_section(r.paper, r.question, r.options)
-            if sec:
-                r.section = sec
-                dirty = True
         out.append(
             {
                 "id": r.id,
