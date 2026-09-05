@@ -1,20 +1,29 @@
 'use client';
 
-"use client";
-
 import { useEffect, useState } from "react";
 import Link from "next/link";
+import { usePathname } from "next/navigation";
 
 export default function Navbar() {
   const [token, setToken] = useState<string | null>(null);
   const [email, setEmail] = useState<string | null>(null);
   const [theme, setTheme] = useState<string>("dark");
+  const [imgOk, setImgOk] = useState(true);
+  const pathname = usePathname();
 
-  useEffect(() => {
+  function readSession() {
     setToken(localStorage.getItem("gate_token"));
     setEmail(localStorage.getItem("gate_email"));
+    setImgOk(true);
+  }
+
+  useEffect(() => {
+    readSession();
     setTheme(document.documentElement.dataset.theme || "dark");
-  }, []);
+    const onStorage = () => readSession();
+    window.addEventListener("storage", onStorage);
+    return () => window.removeEventListener("storage", onStorage);
+  }, [pathname]);
 
   function toggleTheme() {
     const next = theme === "dark" ? "light" : "dark";
@@ -53,6 +62,34 @@ export default function Navbar() {
         </button>
         {token ? (
           <>
+            <span
+              title={email || "Logged in"}
+              style={{
+                display: "inline-flex",
+                alignItems: "center",
+                justifyContent: "center",
+                width: 32,
+                height: 32,
+                borderRadius: "50%",
+                overflow: "hidden",
+                background: "var(--accent-2, #2f6df6)",
+                color: "#fff",
+                fontWeight: 700,
+              }}
+            >
+              {email && imgOk ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={`https://api.dicebear.com/9.x/adventurer/svg?seed=${encodeURIComponent(email)}`}
+                  alt="profile"
+                  width={32}
+                  height={32}
+                  onError={() => setImgOk(false)}
+                />
+              ) : (
+                (email || "?").slice(0, 1).toUpperCase()
+              )}
+            </span>
             <span className="muted">{email}</span>
             <button className="btn secondary" onClick={logout}>
               Logout
