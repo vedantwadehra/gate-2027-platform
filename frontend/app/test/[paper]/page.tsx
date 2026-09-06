@@ -628,8 +628,10 @@ export default function TestPage() {
           gap: 12px;
           flex-wrap: wrap;
           padding: 10px 12px;
-          background: var(--card, #fff);
-          border: 1px solid var(--border, #ddd);
+          background: var(--glass);
+          backdrop-filter: blur(12px);
+          -webkit-backdrop-filter: blur(12px);
+          border: 1px solid var(--border);
           border-radius: 10px;
           margin-bottom: 14px;
         }
@@ -642,20 +644,22 @@ export default function TestPage() {
         }
         .pal {
           width: 34px; height: 34px;
-          border-radius: 8px; border: 1px solid var(--border, #ccc);
-          background: #eee; cursor: pointer; font-weight: 600;
+          border-radius: 8px; border: 1px solid var(--border);
+          background: var(--panel-2); color: var(--muted);
+          cursor: pointer; font-weight: 600;
+          transition: border-color .12s ease, box-shadow .15s ease;
         }
-        .pal.ans { background: #c8e6c9; border-color: #66bb6a; }
-        .pal.mark { background: #ffe0b2; border-color: #ffa726; }
-        .pal.unans { background: #f3f3f3; }
-        .pal.active { outline: 3px solid var(--accent-2, #2f6df6); }
-        .chip.diff-easy { background: #c8e6c9; color: #256029; }
-        .chip.diff-medium { background: #fff3cd; color: #8a6d00; }
-        .chip.diff-hard { background: #f8d7da; color: #842029; }
+        .pal.ans { background: rgba(52, 211, 153, .16); border-color: var(--ok); color: var(--text); }
+        .pal.mark { background: rgba(244, 113, 181, .14); border-color: var(--neon); color: var(--text); }
+        .pal.unans { background: var(--panel-2); }
+        .pal.active { outline: 2px solid var(--accent); box-shadow: 0 0 12px -2px var(--glow); }
+        .chip.diff-easy { background: rgba(52, 211, 153, .14); color: var(--ok); }
+        .chip.diff-medium { background: rgba(250, 204, 21, .14); color: #d9a400; }
+        .chip.diff-hard { background: rgba(251, 113, 133, .14); color: var(--danger); }
         .expbox {
           margin-top: 10px; font-size: 13px;
-          background: var(--card, #fafafa);
-          border: 1px solid var(--border, #eee);
+          background: var(--panel-2);
+          border: 1px solid var(--border);
           border-radius: 8px; padding: 8px 10px;
         }
       `}</style>
@@ -866,20 +870,23 @@ function Calculator({ onClose }: { onClose: () => void }) {
       </div>
       <style jsx>{`
         .calc-overlay {
-          position: fixed; inset: 0; background: rgba(0,0,0,0.4);
+          position: fixed; inset: 0; background: rgba(0,0,0,0.55);
           display: flex; align-items: center; justify-content: center; z-index: 50;
         }
-        .calc { background: var(--card, #fff); padding: 16px; border-radius: 12px; width: 260px; }
+        .calc { background: var(--panel); border: 1px solid var(--border); padding: 16px; border-radius: 12px; width: 260px; box-shadow: 0 12px 40px -12px var(--glow); }
         .calc-disp {
-          background: #111; color: #0f0; font-family: monospace; font-size: 20px;
+          background: #05070d; color: var(--accent); font-size: 20px;
           padding: 10px; border-radius: 8px; min-height: 44px; word-break: break-all; text-align: right;
+          border: 1px solid var(--border);
+          text-shadow: 0 0 12px var(--glow-soft);
         }
         .calc-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 6px; margin-top: 10px; }
         .calc-key {
-          padding: 12px; font-size: 16px; border: 1px solid var(--border, #ccc);
-          border-radius: 8px; background: #f5f5f5; cursor: pointer;
+          padding: 12px; font-size: 16px; border: 1px solid var(--border);
+          border-radius: 8px; background: var(--panel-2); color: var(--text); cursor: pointer;
         }
-        .calc-key.eq { background: var(--accent-2, #2f6df6); color: #fff; }
+        .calc-key:hover { border-color: var(--accent); }
+        .calc-key.eq { background: var(--accent); color: var(--accent-ink); font-weight: 700; }
       `}</style>
     </div>
   );

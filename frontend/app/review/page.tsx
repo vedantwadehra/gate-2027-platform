@@ -109,7 +109,7 @@ export default function ReviewPage() {
           <div style={{ marginBottom: 8, display: "flex", gap: 6, flexWrap: "wrap" }}>
             <span className="chip">{q.section || q.paper}</span>
             {(q.tags || []).map((t) => (
-              <span key={t} className="chip" style={{ background: "#e7e7ff", color: "#333" }}>
+              <span key={t} className="chip">
                 #{t}
               </span>
             ))}

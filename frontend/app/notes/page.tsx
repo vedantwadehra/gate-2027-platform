@@ -352,19 +352,21 @@ export default function NotesPage() {
       )}
       <style jsx>{`
         .grade {
-          border: 1px solid var(--border, #ccc);
-          background: #f5f5f5;
-          color: #222;
+          border: 1px solid var(--border);
+          background: var(--panel-2);
+          color: var(--text);
           border-radius: 8px;
           padding: 6px 12px;
           font-size: 13px;
           font-weight: 600;
           cursor: pointer;
+          transition: border-color .12s ease, box-shadow .15s ease;
         }
-        .g-again { background: #f8d7da; border-color: #f5c2c7; }
-        .g-hard { background: #ffe0b2; border-color: #ffcc80; }
-        .g-good { background: #d1e7dd; border-color: #badbcc; }
-        .g-easy { background: #cfe2ff; border-color: #9ec5fe; }
+        .grade:hover { border-color: var(--accent); box-shadow: 0 4px 14px -8px var(--glow); }
+        .g-again { background: rgba(251, 113, 133, .14); border-color: var(--danger); }
+        .g-hard { background: rgba(244, 113, 181, .13); border-color: var(--neon); }
+        .g-good { background: rgba(52, 211, 153, .13); border-color: var(--ok); }
+        .g-easy { background: rgba(34, 211, 238, .12); border-color: var(--accent); }
       `}</style>
     </div>
   );
