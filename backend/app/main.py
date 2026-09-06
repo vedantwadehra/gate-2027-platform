@@ -180,6 +180,6 @@ app.include_router(oauth_routes.oauth, prefix="/api")
 app.include_router(routes.api, prefix="/api")
 
 
-@app.get("/")
+@app.api_route("/", methods=["GET", "HEAD"])
 def root():
     return {"message": settings.app_name, "docs": "/docs"}
